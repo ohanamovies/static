@@ -1,0 +1,87 @@
+name: Scrape & Deploy
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # every hour
+  workflow_dispatch:        # manual trigger from GitHub UI
+
+# Only one deploy at a time; never cancel an in-flight deploy
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ── Cache IMDb TSV datasets (re-download at most once per week) ────────────
+      - name: Get week stamp
+        id: week
+        run: echo "week=$(date +%Y-%U)" >> $GITHUB_OUTPUT
+
+      - name: Cache IMDb TSVs
+        uses: actions/cache@v4
+        with:
+          path: |
+            scraper/title.basics.tsv
+            scraper/title.ratings.tsv
+          key: imdb-tsv-${{ steps.week.outputs.week }}
+          restore-keys: imdb-tsv-
+
+      # ── Persist incremental scraper cache across runs ──────────────────────────
+      - name: Restore scraper cache
+        uses: actions/cache@v4
+        with:
+          path: scraper/cache.json
+          # New unique key each run so we always save the updated cache;
+          # restore-keys picks up the most recent previous save.
+          key: scraper-cache-${{ github.run_id }}
+          restore-keys: scraper-cache-
+
+      # ── Run scraper ────────────────────────────────────────────────────────────
+      - name: Scrape
+        working-directory: scraper
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: node scrape.js
+
+      # ── Build website ──────────────────────────────────────────────────────────
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
+        id: pages
+
+      - name: Build
+        working-directory: website
+        env:
+          # configure-pages gives us the correct base path (e.g. /moviedb/ or /)
+          VITE_BASE: ${{ steps.pages.outputs.base_path }}
+        run: npm run build
+
+      # ── Deploy to GitHub Pages ─────────────────────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/dist
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4
