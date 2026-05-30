@@ -31,10 +31,11 @@
           </div>
 
           <!-- Maturity section -->
-          <div class="modal-maturity">
+          <div class="modal-maturity" v-if="movie.mat !== undefined || matLoading || parentsGuide">
             <p class="modal-section-label">Maturity</p>
-            <!-- Stored severity from movies.json -->
-            <div class="maturity-bars" v-if="movie.mat">
+
+            <!-- Stored severity bars (only if mat is defined) -->
+            <div class="maturity-bars" v-if="movie.mat !== undefined">
               <div
                 v-for="cat in MATURITY_CATEGORIES"
                 :key="cat.key"
@@ -48,31 +49,38 @@
                     :style="{ width: `${(getSeverity(movie.mat, cat.shift) / 3) * 100}%` }"
                   ></div>
                 </div>
-                <span class="mat-bar-text" :class="`sev-${getSeverity(movie.mat, cat.shift)}`">
-                  {{ SEVERITY_LABELS[getSeverity(movie.mat, cat.shift)] }}
-                </span>
+                <span
+                  v-if="getSeverity(movie.mat, cat.shift) > 0"
+                  class="mat-bar-text"
+                  :class="`sev-${getSeverity(movie.mat, cat.shift)}`"
+                >{{ SEVERITY_LABELS[getSeverity(movie.mat, cat.shift)] }}</span>
               </div>
             </div>
 
-            <!-- Dynamic parentsGuide details -->
-            <div class="maturity-details" v-if="parentsGuide || matLoading">
-              <p class="modal-section-label" style="margin-top: 14px;">Community reviews</p>
-              <div v-if="matLoading" class="mat-loading">Loading…</div>
-              <div v-else-if="parentsGuide" class="mat-items-list">
+            <!-- Dynamic parentsGuide community reviews -->
+            <div class="maturity-details">
+              <p class="modal-section-label mat-reviews-label">Community reviews</p>
+              <div v-if="matLoading" class="mat-loading">Loading reviews…</div>
+              <div v-else-if="matError" class="mat-loading mat-error">{{ matError }}</div>
+              <div v-else-if="parentsGuideCategories.length" class="mat-items-list">
                 <div
                   v-for="cat in parentsGuideCategories"
                   :key="cat.key"
                   class="mat-cat-block"
+                  v-show="cat.items?.length"
                 >
-                  <p class="mat-cat-title">
-                    <span class="mat-sev-badge" :class="`sev-${cat.severity}`">{{ SEVERITY_LABELS[cat.severity] }}</span>
+                  <p class="mat-cat-title" v-if="cat.items?.length">
+                    <span v-if="cat.severity !== null" class="mat-sev-badge" :class="`sev-${cat.severity}`">
+                      {{ SEVERITY_LABELS[cat.severity] }}
+                    </span>
                     {{ cat.label }}
                   </p>
                   <ul v-if="cat.items?.length" class="mat-items">
-                    <li v-for="(item, i) in cat.items.slice(0, 3)" :key="i">{{ item }}</li>
+                    <li v-for="(item, i) in cat.items.slice(0, 5)" :key="i">{{ item }}</li>
                   </ul>
                 </div>
               </div>
+              <div v-else-if="!matLoading" class="mat-loading">No community reviews available.</div>
             </div>
           </div>
 
@@ -99,6 +107,7 @@ defineEmits(["close"]);
 
 const parentsGuide = ref(null);
 const matLoading = ref(false);
+const matError = ref(null);
 
 const genreLabels = computed(() => {
   if (!props.movie) return [];
@@ -114,72 +123,64 @@ const providerNames = computed(() => {
     .map(p => p.name);
 });
 
-// Map API keys to our category definitions
-const CAT_API_ALIASES = {
-  sexAndNudity:           ["sexAndNudity", "sex_and_nudity", "nudity"],
-  violenceAndGore:        ["violenceAndGore", "violence_and_gore", "violence"],
-  profanity:              ["profanity", "language"],
-  alcoholDrugsAndSmoking: ["alcoholDrugsAndSmoking", "alcohol_drugs_and_smoking", "alcohol"],
-  frighteningScenes:      ["frighteningScenes", "frightening_intense_scenes", "frightening"],
+// API response: { parentsGuide: [{ category: "VIOLENCE", severityBreakdowns: [...], reviews: [{text}] }] }
+const API_CAT_MAP = {
+  "SEXUAL_CONTENT":             "sexAndNudity",
+  "VIOLENCE":                   "violenceAndGore",
+  "PROFANITY":                  "profanity",
+  "ALCOHOL_DRUGS":              "alcoholDrugsAndSmoking",
+  "FRIGHTENING_INTENSE_SCENES": "frighteningScenes",
 };
 
-const SEVERITY_MAP = { none: 0, mild: 1, moderate: 2, severe: 3 };
+const SEV_WEIGHTS = { none: 1, mild: 2, moderate: 3, severe: 4 }; // 1-4 → avg → 0-3
 
-function parseSeverity(val) {
-  if (val == null) return 0;
-  return SEVERITY_MAP[String(val).toLowerCase().trim()] ?? 0;
+function weightedSeverity(severityBreakdowns) {
+  if (!Array.isArray(severityBreakdowns) || severityBreakdowns.length === 0) return null;
+  let total = 0, wsum = 0;
+  for (const { severityLevel, voteCount } of severityBreakdowns) {
+    const w = SEV_WEIGHTS[severityLevel];
+    if (w == null) continue;
+    total += voteCount;
+    wsum  += voteCount * w;
+  }
+  if (total === 0) return null;
+  return Math.round(wsum / total) - 1; // 0-3
 }
 
 const parentsGuideCategories = computed(() => {
   if (!parentsGuide.value) return [];
-  const data = parentsGuide.value;
+  const items = parentsGuide.value.parentsGuide;
+  if (!Array.isArray(items)) return [];
+
+  // Index by our internal key
+  const byKey = {};
+  for (const entry of items) {
+    const key = API_CAT_MAP[entry.category];
+    if (key) byKey[key] = entry;
+  }
+
   return MATURITY_CATEGORIES.map(cat => {
-    const aliases = CAT_API_ALIASES[cat.key] ?? [cat.key];
-    let severity = 0;
-    let items = [];
-
-    // Try flat object format
-    for (const alias of aliases) {
-      const section = data[alias];
-      if (!section) continue;
-      if (typeof section === "string") { severity = parseSeverity(section); break; }
-      if (typeof section === "object") {
-        severity = parseSeverity(section.rating ?? section.severity ?? section.level);
-        items = Array.isArray(section.items)
-          ? section.items.map(i => (typeof i === "string" ? i : i.text ?? i.description ?? String(i)))
-          : [];
-        break;
-      }
-    }
-
-    // Try array format
-    if (Array.isArray(data?.categories)) {
-      for (const item of data.categories) {
-        const k = (item.category ?? item.id ?? item.name ?? "").toLowerCase();
-        if (aliases.some(a => k.includes(a.toLowerCase().slice(0, 6)))) {
-          severity = parseSeverity(item.rating ?? item.severity ?? item.level);
-          items = Array.isArray(item.items)
-            ? item.items.map(i => (typeof i === "string" ? i : i.text ?? i.description ?? String(i)))
-            : [];
-          break;
-        }
-      }
-    }
-
-    return { ...cat, severity, items };
+    const entry = byKey[cat.key];
+    if (!entry) return { ...cat, severity: null, items: [] };
+    const severity = weightedSeverity(entry.severityBreakdowns);
+    const reviews = (entry.reviews ?? []).map(r => r.text).filter(Boolean);
+    return { ...cat, severity, items: reviews };
   });
 });
 
 async function loadParentsGuide(imdbId) {
   if (!imdbId) return;
   parentsGuide.value = null;
+  matError.value = null;
   matLoading.value = true;
   try {
     const res = await fetch(`https://api.imdbapi.dev/titles/${imdbId}/parentsGuide`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    parentsGuide.value = await res.json();
+    const json = await res.json();
+    parentsGuide.value = json;
   } catch (e) {
-    console.warn("Could not load parentsGuide:", e.message);
+    matError.value = "Could not load reviews.";
+    console.warn("parentsGuide fetch failed:", e.message);
   } finally {
     matLoading.value = false;
   }
@@ -187,6 +188,7 @@ async function loadParentsGuide(imdbId) {
 
 watch(() => props.movie?.id, (id) => {
   if (id) loadParentsGuide(id);
+  else { parentsGuide.value = null; matError.value = null; }
 }, { immediate: true });
 </script>
 
@@ -347,11 +349,15 @@ watch(() => props.movie?.id, (id) => {
 
 .mat-bar-text { font-size: 11px; text-align: right; }
 
+.mat-reviews-label { margin-top: 14px; }
+
 .mat-loading {
   font-size: 12px;
   color: var(--muted);
   padding: 8px 0;
 }
+
+.mat-error { color: rgba(248,113,113,0.7); }
 
 .mat-items-list { display: flex; flex-direction: column; gap: 10px; }
 

@@ -3,7 +3,7 @@
  * MovieDB Scraper
  * ---------------
  * 1. Downloads IMDb title.basics + title.ratings datasets
- * 2. Filters top 20k movies+tvSeasons by vote count + rating
+ * 2. Filters top 50k movies+tvSeasons by vote count + rating
  * 3. Enriches with TMDB data (poster URL, providers, popularity)
  *    - Runs incrementally: skips already-enriched movies
  *    - Respects TMDB rate limits (40 req/10s)
@@ -31,21 +31,21 @@ const CACHE_FILE = path.resolve("./cache.json");
 const OUTPUT_FILE = path.join(OUT_DIR, "movies.json");
 const IMDB_BASICS_URL = "https://datasets.imdbws.com/title.basics.tsv.gz";
 const IMDB_RATINGS_URL = "https://datasets.imdbws.com/title.ratings.tsv.gz";
-const TOP_N = 20_000;
+const TOP_N = 50_000;
 const TMDB_RATE_LIMIT = 40; // requests per window
 const TMDB_RATE_WINDOW = 10_000; // ms
-const MAT_RATE_LIMIT = 10; // imdbapi.dev rate limit per window
-const MAT_RATE_WINDOW = 10_000; // ms
+const MAT_RATE_LIMIT = 5; // imdbapi.dev rate limit per window
+const MAT_RATE_WINDOW = 5_000; // ms
 
 // CLI args
 const args = process.argv.slice(2);
 const enrichLimit = (() => {
   const idx = args.indexOf("--limit");
-  return idx !== -1 ? parseInt(args[idx + 1]) : Infinity;
+  return idx !== -1 ? parseInt(args[idx + 1]) : 500;
 })();
 const matLimit = (() => {
   const idx = args.indexOf("--mat-limit");
-  return idx !== -1 ? parseInt(args[idx + 1]) : Infinity;
+  return idx !== -1 ? parseInt(args[idx + 1]) : 50;
 })();
 
 // ─── Bitmask Definitions ────────────────────────────────────────────────────────
@@ -241,14 +241,14 @@ async function buildTopN() {
   log("Parsing IMDb ratings...");
   const ratings = new Map();
   await parseTsv("./title.ratings.tsv", (row) => {
-    if (parseFloat(row.numVotes) >= 1000) {
+    if (parseFloat(row.numVotes) >= 1000 && parseFloat(row.averageRating) >= 5 ) {
       ratings.set(row.tconst, {
         rating: parseFloat(row.averageRating),
         votes: parseInt(row.numVotes),
       });
     }
   });
-  log(`Loaded ${ratings.size} titles with ≥1000 votes.`);
+  log(`Loaded ${ratings.size} titles with ≥1000 votes & averageRating ≥ 5.`);
 
   log("Parsing IMDb basics...");
   const titles = [];
@@ -382,69 +382,50 @@ async function enrichWithTmdb(movies, cache) {
 }
 
 // ─── Step 4: Maturity enrichment (imdbapi.dev) ─────────────────────────────────
-const SEVERITY_MAP = { none: 0, mild: 1, moderate: 2, severe: 3 };
+// API response shape (confirmed):
+// { parentsGuide: [{ category: "VIOLENCE", severityBreakdowns: [{ severityLevel: "mild", voteCount: 121 }, ...], reviews: [{ text: "..." }] }] }
 
-// Keys to check in the API response (in priority order per category)
-const MAT_KEY_ALIASES = {
-  sexAndNudity:           ["sexAndNudity", "sex_and_nudity", "nudity"],
-  violenceAndGore:        ["violenceAndGore", "violence_and_gore", "violence"],
-  profanity:              ["profanity", "language"],
-  alcoholDrugsAndSmoking: ["alcoholDrugsAndSmoking", "alcohol_drugs_and_smoking", "alcohol", "drugs"],
-  frighteningScenes:      ["frighteningScenes", "frightening_intense_scenes", "frightening"],
+// Map API uppercase category names → our MATURITY_CATEGORIES shift positions
+const API_CAT_TO_SHIFT = {
+  "SEXUAL_CONTENT":             0,  // sexAndNudity
+  "VIOLENCE":                   2,  // violenceAndGore
+  "PROFANITY":                  4,  // profanity
+  "ALCOHOL_DRUGS":              6,  // alcoholDrugsAndSmoking
+  "FRIGHTENING_INTENSE_SCENES": 8,  // frighteningScenes
 };
 
-function parseSeverity(value) {
-  if (!value) return 0;
-  const v = String(value).toLowerCase().trim();
-  return SEVERITY_MAP[v] ?? 0;
+const SEV_WEIGHT = { none: 1, mild: 2, moderate: 3, severe: 4 };
+
+// Compute weighted average from severityBreakdowns array → 0-3
+function weightedSeverity(severityBreakdowns) {
+  if (!Array.isArray(severityBreakdowns) || severityBreakdowns.length === 0) return null;
+  let total = 0, wsum = 0;
+  for (const { severityLevel, voteCount } of severityBreakdowns) {
+    const w = SEV_WEIGHT[severityLevel];
+    if (w == null) continue;
+    total += voteCount;
+    wsum  += voteCount * w;
+  }
+  if (total === 0) return null;
+  return Math.round(wsum / total) - 1; // convert 1-4 avg → 0-3
 }
 
 function parseMaturityResponse(data) {
-  // Try flat object: { sexAndNudity: { rating: "Moderate" }, ... }
-  // Try array: { categories: [{ category: "sexAndNudity", rating: "..." }] }
-  // Try direct severity strings: { sexAndNudity: "Moderate" }
+  const items = data?.parentsGuide;
+  if (!Array.isArray(items) || items.length === 0) return null;
+
   let mat = 0;
-  const lookupFlat = (catKey) => {
-    const aliases = MAT_KEY_ALIASES[catKey] ?? [catKey];
-    for (const alias of aliases) {
-      const section = data[alias];
-      if (!section) continue;
-      if (typeof section === "string") return parseSeverity(section);
-      if (typeof section === "object") {
-        const sev = section.rating ?? section.severity ?? section.level ?? section.severityLevel;
-        if (sev !== undefined) return parseSeverity(sev);
-      }
+  let anyFound = false;
+  for (const item of items) {
+    const shift = API_CAT_TO_SHIFT[item.category];
+    if (shift == null) continue;
+    const sev = weightedSeverity(item.severityBreakdowns);
+    if (sev != null) {
+      mat |= (sev & 3) << shift;
+      anyFound = true;
     }
-    return 0;
-  };
-
-  // Array-based response
-  if (Array.isArray(data?.categories)) {
-    const byKey = {};
-    for (const item of data.categories) {
-      const k = item.category ?? item.id ?? item.name;
-      if (k) byKey[k.toLowerCase()] = item;
-    }
-    for (const { key, shift } of MATURITY_CATEGORIES) {
-      const aliases = MAT_KEY_ALIASES[key] ?? [key];
-      for (const alias of aliases) {
-        const item = byKey[alias.toLowerCase()];
-        if (item) {
-          const sev = item.rating ?? item.severity ?? item.level ?? item.severityLevel;
-          mat |= (parseSeverity(sev) & 3) << shift;
-          break;
-        }
-      }
-    }
-    return mat;
   }
-
-  // Flat object response
-  for (const { key, shift } of MATURITY_CATEGORIES) {
-    const sev = lookupFlat(key);
-    mat |= (sev & 3) << shift;
-  }
-  return mat;
+  return anyFound ? mat : null;
 }
 
 async function enrichWithMaturity(movies, cache) {
@@ -453,7 +434,7 @@ async function enrichWithMaturity(movies, cache) {
   log(`Enriching ${toEnrich.length} titles with maturity data (${unenriched.length - toEnrich.length} deferred)...`);
 
   let done = 0;
-  const BATCH = 10;
+  const BATCH = 8;
 
   for (let i = 0; i < toEnrich.length; i += BATCH) {
     const batch = toEnrich.slice(i, i + BATCH);
@@ -463,10 +444,15 @@ async function enrichWithMaturity(movies, cache) {
           const url = `https://api.imdbapi.dev/titles/${movie.id}/parentsGuide`;
           const data = await matLimiter.run(() => fetchJson(url));
           const matMask = parseMaturityResponse(data);
-          cache[movie.id] = { ...cache[movie.id], maturityDone: true, matMask };
+          // matMask is null if we couldn't parse any data, or a number (0-1023) if parsed
+          if (matMask != null) {
+            cache[movie.id] = { ...cache[movie.id], maturityDone: true, matMask };
+          } else {
+            cache[movie.id] = { ...cache[movie.id], maturityDone: true };
+          }
         } catch (e) {
           log(`  ✗ Mat ${movie.id}: ${e.message}`);
-          cache[movie.id] = { ...cache[movie.id], maturityDone: true, matMask: 0 };
+          cache[movie.id] = { ...cache[movie.id], maturityDone: true }; // mark done, no matMask
         }
       })
     );
@@ -496,8 +482,9 @@ function buildOutput(movies, cache) {
       p: c.poster ?? null,
       prov: c.providerMask ?? 0,
     };
-    if (m.isSeason) entry.s = 1; // flag: is TV season
-    if (c.matMask) entry.mat = c.matMask;
+    if (m.isSeason) entry.s = 1;
+    // mat is only written when scraper successfully computed a mask (including 0 = all-None)
+    if (c.maturityDone && c.matMask !== undefined) entry.mat = c.matMask;
     return entry;
   });
 

@@ -23,7 +23,7 @@
     <div class="hero-content">
       <!-- Wordmark -->
       <div class="hero-brand">
-        <span class="hero-logo">Ohana movies</span>
+        <span class="hero-logo">Ohana TV</span>
         <span class="hero-tagline">Family friendly movies.</span>
       </div>
 
@@ -95,17 +95,26 @@
             </div>
           </div>
 
-          <!-- Maturity filter -->
+          <!-- Per-category maturity filter -->
           <div class="filter-group">
-            <p class="filter-label">Max maturity</p>
-            <div class="filter-chips">
-              <button
-                v-for="(label, idx) in SEVERITY_LABELS"
-                :key="idx"
-                class="chip chip--maturity"
-                :class="[`chip--sev-${idx}`, { active: store.maxMaturity === idx }]"
-                @click="store.setMaxMaturity(idx)"
-              >{{ label }}</button>
+            <p class="filter-label">Max maturity per category</p>
+            <div class="mat-cat-grid">
+              <div
+                v-for="(cat, catIdx) in MATURITY_CATEGORIES"
+                :key="cat.key"
+                class="mat-cat-row"
+              >
+                <span class="mat-cat-name">{{ cat.label }}</span>
+                <div class="filter-chips">
+                  <button
+                    v-for="(label, sev) in SEVERITY_LABELS"
+                    :key="sev"
+                    class="chip chip--maturity chip--sm"
+                    :class="[`chip--sev-${sev}`, { active: store.maxMaturityCat[catIdx] === sev }]"
+                    @click="store.setMaxMaturityCat(catIdx, sev)"
+                  >{{ label }}</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -125,7 +134,7 @@
 
 <script setup>
 import { computed } from "vue";
-import { useMovieStore, GENRE_LABELS, PROVIDERS, SEVERITY_LABELS } from "@/stores/movies.js";
+import { useMovieStore, GENRE_LABELS, PROVIDERS, SEVERITY_LABELS, MATURITY_CATEGORIES } from "@/stores/movies.js";
 
 const store = useMovieStore();
 
@@ -143,7 +152,7 @@ const hasFilters = computed(() =>
   store.selectedGenres.size > 0 ||
   store.selectedProviders !== 0 ||
   store.minRating > 0 ||
-  store.maxMaturity >= 0
+  store.maxMaturityCat.some(v => v >= 0)
 );
 </script>
 
@@ -359,6 +368,29 @@ const hasFilters = computed(() =>
 .chip--sev-1.active { background: rgba(250,204,21,0.15); }
 .chip--sev-2.active { background: rgba(251,146,60,0.15); }
 .chip--sev-3.active { background: rgba(248,113,113,0.15); }
+
+.chip--sm { padding: 3px 8px; font-size: 11px; }
+
+/* Per-category maturity grid */
+.mat-cat-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.mat-cat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mat-cat-name {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 90px;
+  flex-shrink: 0;
+}
 
 /* ── Rating slider ── */
 .rating-slider-wrap {

@@ -1,16 +1,19 @@
 <template>
   <div class="app">
-    <!-- Loading state -->
-    <div class="loading-screen" v-if="store.loading">
-      <div class="loading-logo">Ohana movies</div>
-      <div class="loading-bar"><div class="loading-bar-fill"></div></div>
-      <p class="loading-text">Loading movies…</p>
-    </div>
+    <HeroSection />
 
-    <template v-else>
-      <HeroSection />
+    <main class="catalog">
+      <!-- Still loading: show skeleton rows -->
+      <template v-if="store.loading">
+        <div class="skeleton-row" v-for="n in 3" :key="n">
+          <div class="skeleton-label"></div>
+          <div class="skeleton-cards">
+            <div class="skeleton-card" v-for="c in 8" :key="c"></div>
+          </div>
+        </div>
+      </template>
 
-      <main class="catalog">
+      <template v-else>
         <div v-if="store.filteredMovies.length === 0" class="empty-state">
           <p class="empty-icon">◌</p>
           <p class="empty-title">No movies match your filters</p>
@@ -44,12 +47,12 @@
             />
           </template>
         </template>
-      </main>
+      </template>
+    </main>
 
-      <footer class="footer">
-        <p>Data from <a href="https://www.imdb.com" target="_blank" rel="noopener">IMDb</a> &amp; <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Not affiliated with either.</p>
-      </footer>
-    </template>
+    <footer class="footer" v-if="!store.loading">
+      <p>Data from <a href="https://www.imdb.com" target="_blank" rel="noopener">IMDb</a> &amp; <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Not affiliated with either.</p>
+    </footer>
 
     <MovieModal
       :movie="selectedMovie"
@@ -126,6 +129,45 @@ onMounted(() => store.loadMovies());
 .catalog {
   flex: 1;
   padding-bottom: 60px;
+}
+
+/* ── Skeleton loader ── */
+.skeleton-row {
+  margin-bottom: 36px;
+  padding: 0 48px;
+}
+
+.skeleton-label {
+  width: 160px;
+  height: 22px;
+  background: var(--surface2);
+  border-radius: 4px;
+  margin-bottom: 14px;
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.skeleton-cards {
+  display: flex;
+  gap: var(--gap);
+}
+
+.skeleton-card {
+  width: var(--card-w);
+  height: var(--card-h);
+  flex-shrink: 0;
+  background: var(--surface2);
+  border-radius: var(--radius);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.skeleton-card:nth-child(2) { animation-delay: 0.1s; }
+.skeleton-card:nth-child(3) { animation-delay: 0.2s; }
+.skeleton-card:nth-child(4) { animation-delay: 0.3s; }
+.skeleton-card:nth-child(5) { animation-delay: 0.4s; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.6; }
 }
 
 /* ── Empty state ── */

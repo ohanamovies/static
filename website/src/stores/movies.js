@@ -82,7 +82,8 @@ export const useMovieStore = defineStore("movies", () => {
   const selectedGenres = ref(new Set());
   const selectedProviders = ref(0);       // bitmask of selected providers
   const minRating = ref(0);
-  const maxMaturity = ref(-1);            // -1=off, 0=None only, 1=max Mild, 2=max Moderate, 3=all
+  // Per-category max severity: index matches MATURITY_CATEGORIES order, -1 = no filter
+  const maxMaturityCat = ref([-1, -1, -1, -1, -1]);
 
   let fuse = null;
 
@@ -139,9 +140,18 @@ export const useMovieStore = defineStore("movies", () => {
       pool = pool.filter(({ item }) => item.r >= minRating.value);
     }
 
-    if (maxMaturity.value >= 0) {
-      const threshold = maxMaturity.value;
-      pool = pool.filter(({ item }) => getMaxSeverity(item.mat ?? 0) <= threshold);
+    const catThresholds = maxMaturityCat.value;
+    if (catThresholds.some(t => t >= 0)) {
+      pool = pool.filter(({ item }) => {
+        // Exclude movies with no maturity data when any filter is active
+        if (item.mat === undefined) return false;
+        for (let i = 0; i < MATURITY_CATEGORIES.length; i++) {
+          const threshold = catThresholds[i];
+          if (threshold < 0) continue;
+          if (getSeverity(item.mat, MATURITY_CATEGORIES[i].shift) > threshold) return false;
+        }
+        return true;
+      });
     }
 
     if (query.length >= 2) {
@@ -166,11 +176,13 @@ export const useMovieStore = defineStore("movies", () => {
     const rows = [];
     const byPopRating = (a, b) => (b.pop || 0) * b.r - (a.pop || 0) * a.r;
 
-    const topRated = [...pool].sort((a, b) => b.r - a.r).slice(0, 40);
+    const ROW_MAX = 200;
+
+    const topRated = [...pool].sort((a, b) => b.r - a.r).slice(0, ROW_MAX);
     if (topRated.length >= 4)
       rows.push({ id: "top-rated", label: "Top Rated", movies: topRated });
 
-    const trending = [...pool].sort((a, b) => (b.pop || 0) - (a.pop || 0)).slice(0, 40);
+    const trending = [...pool].sort((a, b) => (b.pop || 0) - (a.pop || 0)).slice(0, ROW_MAX);
     if (trending.length >= 4)
       rows.push({ id: "trending", label: "Trending Now", movies: trending });
 
@@ -178,7 +190,7 @@ export const useMovieStore = defineStore("movies", () => {
       const genreMovies = pool
         .filter((m) => m.g & mask)
         .sort(byPopRating)
-        .slice(0, 40);
+        .slice(0, ROW_MAX);
       if (genreMovies.length >= 4)
         rows.push({ id: `genre-${genre}`, label: genre, movies: genreMovies });
     }
@@ -187,7 +199,7 @@ export const useMovieStore = defineStore("movies", () => {
       const provMovies = pool
         .filter((m) => m.prov & prov.bit)
         .sort(byPopRating)
-        .slice(0, 40);
+        .slice(0, ROW_MAX);
       if (provMovies.length >= 4)
         rows.push({ id: `prov-${prov.id}`, label: `On ${prov.name}`, movies: provMovies });
     }
@@ -206,8 +218,10 @@ export const useMovieStore = defineStore("movies", () => {
     selectedProviders.value ^= bit;
   }
 
-  function setMaxMaturity(level) {
-    maxMaturity.value = maxMaturity.value === level ? -1 : level;
+  function setMaxMaturityCat(catIndex, level) {
+    const arr = [...maxMaturityCat.value];
+    arr[catIndex] = arr[catIndex] === level ? -1 : level; // toggle off if same
+    maxMaturityCat.value = arr;
   }
 
   function clearFilters() {
@@ -215,7 +229,7 @@ export const useMovieStore = defineStore("movies", () => {
     selectedGenres.value = new Set();
     selectedProviders.value = 0;
     minRating.value = 0;
-    maxMaturity.value = -1;
+    maxMaturityCat.value = [-1, -1, -1, -1, -1];
   }
 
   const availableProviders = computed(() => {
@@ -226,9 +240,9 @@ export const useMovieStore = defineStore("movies", () => {
 
   return {
     allMovies, loading, error,
-    searchQuery, selectedGenres, selectedProviders, minRating, maxMaturity,
+    searchQuery, selectedGenres, selectedProviders, minRating, maxMaturityCat,
     filteredMovies, movieRows, availableProviders,
-    loadMovies, toggleGenre, toggleProvider, setMaxMaturity, clearFilters,
+    loadMovies, toggleGenre, toggleProvider, setMaxMaturityCat, clearFilters,
   };
 });
 
