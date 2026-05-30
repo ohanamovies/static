@@ -1,0 +1,49 @@
+/* ── CineVault Design System ─────────────────────────── */
+:root {
+  --black:       #080810;
+  --surface:     #0f0f1a;
+  --surface2:    #16161f;
+  --surface3:    #1e1e2a;
+  --border:      rgba(255,255,255,0.07);
+  --white:       #f0eee8;
+  --muted:       #8a8899;
+  --accent:      #e8365d;
+  --accent2:     #ff8c42;
+  --gold:        #f5c842;
+  --teal:        #2dd4bf;
+
+  --font-display: "Bebas Neue", sans-serif;
+  --font-body:    "DM Sans", sans-serif;
+
+  --card-w:      160px;
+  --card-h:      240px;
+  --gap:         12px;
+  --radius:      8px;
+  --radius-lg:   14px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 99px; }
+
+/* Utilities */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); border: 0;
+}

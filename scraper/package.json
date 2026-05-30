@@ -1,0 +1,11 @@
+{
+  "name": "moviedb-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Downloads IMDb datasets and enriches with TMDB data",
+  "scripts": {
+    "scrape": "node scrape.js",
+    "scrape:batch": "node scrape.js --limit 500"
+  },
+  "engines": { "node": ">=18" }
+}
