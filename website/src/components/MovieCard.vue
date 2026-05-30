@@ -6,6 +6,7 @@
         :src="movie.p"
         :alt="movie.t"
         loading="lazy"
+        :class="{ 'poster-blurred': nudityBlurred }"
         @error="imgError = true"
       />
       <div v-else class="card-placeholder">
@@ -52,6 +53,11 @@ const genreLabels = computed(() => {
   return labels.slice(0, 2).join(" · ") || "–";
 });
 
+// sexAndNudity is shift 0 in the bitmask
+const nudityBlurred = computed(() =>
+  props.movie.mat !== undefined && getSeverity(props.movie.mat, 0) === 3
+);
+
 const posterStyle = computed(() => ({
   background: props.movie._mockColor || "#16161f",
 }));
@@ -85,6 +91,11 @@ const posterStyle = computed(() => ({
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.poster-blurred {
+  filter: blur(12px);
+  transform: scale(1.08);
 }
 
 .card-placeholder {
@@ -137,6 +148,7 @@ const posterStyle = computed(() => ({
   left: 6px;
   display: flex;
   gap: 3px;
+  opacity: 1;
 }
 
 .mat-dot {
