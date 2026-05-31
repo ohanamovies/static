@@ -1,6 +1,8 @@
 name: Scrape & Deploy
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "0 * * * *"   # every hour
   workflow_dispatch:        # manual trigger from GitHub UI
@@ -58,7 +60,12 @@ jobs:
         working-directory: scraper
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-        run: node scrape.js
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            node scrape.js
+          else
+            node scrape.js --limit 0 --mat-limit 0
+          fi
 
       # ── Build website ──────────────────────────────────────────────────────────
       - name: Install website dependencies

@@ -3,7 +3,7 @@ import vue from "@vitejs/plugin-vue";
 import path from "path";
 
 export default defineConfig({
-  base: process.env.VITE_BASE ?? "/",
+  base: "/",
   plugins: [vue()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
 });
