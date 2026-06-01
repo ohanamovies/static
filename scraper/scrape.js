@@ -5,15 +5,17 @@
  * 1. Downloads IMDb title.basics + title.ratings datasets
  * 2. Filters top 50k movies+tvSeasons by vote count + rating
  * 3. Enriches with TMDB data (poster URL, providers, popularity)
- *    - Runs incrementally: skips already-enriched movies
+ *    - Runs incrementally: skips recently-enriched movies
+ *    - Re-enriches stale entries (older than --recrawl-days, default 30d), oldest-first
  *    - Respects TMDB rate limits (40 req/10s)
  * 4. Enriches with IMDb parentsGuide maturity data
  * 5. Outputs: public/movies.json (bitmask-encoded, minified)
  *
  * Usage:
  *   TMDB_API_KEY=your_key node scrape.js
- *   TMDB_API_KEY=your_key node scrape.js --limit 100   # enrich only 100 new movies
- *   TMDB_API_KEY=your_key node scrape.js --mat-limit 100  # enrich 100 maturity entries
+ *   TMDB_API_KEY=your_key node scrape.js --limit 100          # enrich only 100 new/stale movies
+ *   TMDB_API_KEY=your_key node scrape.js --mat-limit 100      # enrich 100 maturity entries
+ *   TMDB_API_KEY=your_key node scrape.js --recrawl-days 14    # re-enrich entries older than 14 days (default: 30)
  */
 
 import fs from "fs";
@@ -45,8 +47,13 @@ const enrichLimit = (() => {
 })();
 const matLimit = (() => {
   const idx = args.indexOf("--mat-limit");
-  return idx !== -1 ? parseInt(args[idx + 1]) : 50;
+  return idx !== -1 ? parseInt(args[idx + 1]) : 250;
 })();
+const recrawlDays = (() => {
+  const idx = args.indexOf("--recrawl-days");
+  return idx !== -1 ? parseInt(args[idx + 1]) : 30;
+})();
+const RECRAWL_MS = recrawlDays * 24 * 60 * 60 * 1000;
 
 // ─── Bitmask Definitions ────────────────────────────────────────────────────────
 export const GENRES = {
@@ -293,9 +300,27 @@ async function enrichWithTmdb(movies, cache) {
     return;
   }
 
-  const unenriched = movies.filter((m) => !cache[m.id]?.enriched);
-  const toEnrich = unenriched.slice(0, enrichLimit);
-  log(`Enriching ${toEnrich.length} titles with TMDB data (${unenriched.length - toEnrich.length} deferred)...`);
+  const now = Date.now();
+  // A cache entry is stale if it has never been enriched, or its timestamp is older than RECRAWL_MS.
+  // Entries with legacy `enriched: true` but no `tmdbEnrichedAt` are treated as epoch 0 (always stale).
+  const needsEnrichment = (m) => {
+    const c = cache[m.id];
+    if (!c?.enriched) return true;
+    const ts = c.tmdbEnrichedAt ? new Date(c.tmdbEnrichedAt).getTime() : 0;
+    return now - ts > RECRAWL_MS;
+  };
+
+  // Sort: no-date (never enriched) first, then oldest tmdbEnrichedAt first
+  const stale = movies
+    .filter(needsEnrichment)
+    .sort((a, b) => {
+      const tsA = cache[a.id]?.tmdbEnrichedAt ? new Date(cache[a.id].tmdbEnrichedAt).getTime() : 0;
+      const tsB = cache[b.id]?.tmdbEnrichedAt ? new Date(cache[b.id].tmdbEnrichedAt).getTime() : 0;
+      return tsA - tsB;
+    });
+
+  const toEnrich = stale.slice(0, enrichLimit);
+  log(`Enriching ${toEnrich.length} titles with TMDB data (${stale.length - toEnrich.length} stale deferred, recrawl window: ${recrawlDays}d)...`);
 
   let done = 0;
   const BATCH = 50;
@@ -362,10 +387,10 @@ async function enrichWithTmdb(movies, cache) {
             }
           }
 
-          cache[movie.id] = { enriched: true, poster, popularity, providerMask };
+          cache[movie.id] = { enriched: true, tmdbEnrichedAt: new Date().toISOString(), poster, popularity, providerMask };
         } catch (e) {
           log(`  ✗ TMDB ${movie.id}: ${e.message}`);
-          cache[movie.id] = { enriched: true, poster: null, popularity: 0, providerMask: 0 };
+          cache[movie.id] = { enriched: true, tmdbEnrichedAt: new Date().toISOString(), poster: null, popularity: 0, providerMask: 0 };
         }
       })
     );
@@ -429,9 +454,26 @@ function parseMaturityResponse(data) {
 }
 
 async function enrichWithMaturity(movies, cache) {
-  const unenriched = movies.filter((m) => cache[m.id]?.maturityDone !== true);
-  const toEnrich = unenriched.slice(0, matLimit);
-  log(`Enriching ${toEnrich.length} titles with maturity data (${unenriched.length - toEnrich.length} deferred)...`);
+  const now = Date.now();
+  // Stale if never enriched, or timestamp older than RECRAWL_MS (legacy entries with no date → epoch 0)
+  const needsEnrichment = (m) => {
+    const c = cache[m.id];
+    if (!c?.maturityDone) return true;
+    const ts = c.maturityEnrichedAt ? new Date(c.maturityEnrichedAt).getTime() : 0;
+    return now - ts > RECRAWL_MS;
+  };
+
+  // Sort: never-enriched first, then oldest maturityEnrichedAt first
+  const stale = movies
+    .filter(needsEnrichment)
+    .sort((a, b) => {
+      const tsA = cache[a.id]?.maturityEnrichedAt ? new Date(cache[a.id].maturityEnrichedAt).getTime() : 0;
+      const tsB = cache[b.id]?.maturityEnrichedAt ? new Date(cache[b.id].maturityEnrichedAt).getTime() : 0;
+      return tsA - tsB;
+    });
+
+  const toEnrich = stale.slice(0, matLimit);
+  log(`Enriching ${toEnrich.length} titles with maturity data (${stale.length - toEnrich.length} stale deferred, recrawl window: ${recrawlDays}d)...`);
 
   let done = 0;
   const BATCH = 8;
@@ -446,13 +488,13 @@ async function enrichWithMaturity(movies, cache) {
           const matMask = parseMaturityResponse(data);
           // matMask is null if we couldn't parse any data, or a number (0-1023) if parsed
           if (matMask != null) {
-            cache[movie.id] = { ...cache[movie.id], maturityDone: true, matMask };
+            cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString(), matMask };
           } else {
-            cache[movie.id] = { ...cache[movie.id], maturityDone: true };
+            cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString() };
           }
         } catch (e) {
           log(`  ✗ Mat ${movie.id}: ${e.message}`);
-          cache[movie.id] = { ...cache[movie.id], maturityDone: true }; // mark done, no matMask
+          cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString() }; // mark done, no matMask
         }
       })
     );

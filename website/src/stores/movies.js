@@ -125,6 +125,15 @@ export const useMovieStore = defineStore("movies", () => {
 
     let pool = scored;
 
+    // When no search query
+    if (query.length < 2) {
+      // hide movies without a poster
+      pool = pool.filter(({ item }) => item.p);
+      // Filter out movies with severe sex/nudity (sexAndNudity shift = 0)
+      pool = pool.filter(({ item }) => getSeverity(item.mat ?? 0, 0) < 3);
+    }   
+    
+
     if (selectedGenres.value.size > 0) {
       let mask = 0;
       for (const g of selectedGenres.value) mask |= (GENRES[g] ?? 0);
