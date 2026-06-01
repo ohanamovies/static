@@ -196,12 +196,20 @@ const hasFilters = computed(() =>
   flex: 1;
 }
 
+.poster-col:nth-child(even) {
+  margin-top: -48px;
+}
+
+.poster-col:nth-child(odd) {
+  margin-top: 24px;
+}
+
 .poster-bg-img {
   width: 100%;
   aspect-ratio: 2/3;
   object-fit: cover;
   border-radius: 4px;
-  opacity: 0.65;
+  opacity: 0.55;
   display: block;
   flex-shrink: 0;
 }
@@ -211,10 +219,10 @@ const hasFilters = computed(() =>
   inset: 0;
   z-index: 1;
   background:
-    linear-gradient(135deg, rgba(232,54,93,0.32) 0%, transparent 55%),
-    linear-gradient(225deg, rgba(45,212,191,0.20) 0%, transparent 50%),
-    radial-gradient(ellipse 90% 70% at 50% 20%, rgba(8,8,16,0.25) 0%, transparent 100%),
-    linear-gradient(to bottom, rgba(8,8,16,0.05) 0%, rgba(8,8,16,0.60) 60%, var(--black) 100%);
+    linear-gradient(135deg, rgba(232,54,93,0.28) 0%, transparent 50%),
+    linear-gradient(225deg, rgba(45,212,191,0.15) 0%, transparent 45%),
+    radial-gradient(ellipse 110% 60% at 50% 0%, rgba(8,8,16,0.55) 0%, transparent 100%),
+    linear-gradient(to bottom, rgba(8,8,16,0.15) 0%, rgba(8,8,16,0.72) 55%, var(--black) 90%);
   pointer-events: none;
 }
 
@@ -245,7 +253,7 @@ const hasFilters = computed(() =>
 
 .hero-tagline {
   font-size: 15px;
-  color: rgba(255,255,255,0.65);
+  color: rgba(255,255,255,0.82);
   font-style: italic;
 }
 
@@ -260,6 +268,7 @@ const hasFilters = computed(() =>
 
 .hero-search {
   position: relative;
+  flex: 1 1 320px;
   max-width: 560px;
   display: flex;
   align-items: center;
@@ -276,7 +285,7 @@ const hasFilters = computed(() =>
 
 .search-input {
   width: 100%;
-  min-width: 480px;
+  min-width: 0;
   max-width: 100%;
   padding: 14px 16px 14px 48px;
   background: rgba(18,18,28,0.96);
@@ -319,7 +328,7 @@ const hasFilters = computed(() =>
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: rgba(255,255,255,0.55);
+  color: rgba(255,255,255,0.72);
 }
 
 .filter-chips {
@@ -336,9 +345,9 @@ const hasFilters = computed(() =>
 .chip {
   padding: 5px 12px;
   background: rgba(30,30,42,0.92);
-  border: 1px solid rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.22);
   border-radius: 99px;
-  color: rgba(255,255,255,0.6);
+  color: rgba(255,255,255,0.78);
   font-family: var(--font-body);
   font-size: 12px;
   cursor: pointer;
@@ -398,7 +407,7 @@ const hasFilters = computed(() =>
 
 .mat-cat-name {
   font-size: 12px;
-  color: var(--muted);
+  color: rgba(255,255,255,0.70);
   min-width: 90px;
   flex-shrink: 0;
 }

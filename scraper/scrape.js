@@ -15,6 +15,7 @@
  *   TMDB_API_KEY=your_key node scrape.js
  *   TMDB_API_KEY=your_key node scrape.js --limit 100          # enrich only 100 new/stale movies
  *   TMDB_API_KEY=your_key node scrape.js --mat-limit 100      # enrich 100 maturity entries
+ *   node scrape.js --recompute-mat                           # recompute all matMasks from cached raw data (no network)
  *   TMDB_API_KEY=your_key node scrape.js --recrawl-days 14    # re-enrich entries older than 14 days (default: 30)
  */
 
@@ -25,6 +26,7 @@ import http from "http";
 import zlib from "zlib";
 import readline from "readline";
 import { pipeline } from "stream/promises";
+import { API_CAT_TO_SHIFT, computeSeverity, parseMaturityResponse, weightedSeverityLegacy } from "./../website/src/maturity.js";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const TMDB_KEY = process.env.TMDB_API_KEY;
@@ -54,6 +56,9 @@ const recrawlDays = (() => {
   return idx !== -1 ? parseInt(args[idx + 1]) : 30;
 })();
 const RECRAWL_MS = recrawlDays * 24 * 60 * 60 * 1000;
+// --recompute-mat: re-run parseMaturityResponse on every cached rawParentsGuide
+// without hitting the network. Useful after tuning the severity algorithm.
+const recomputeMat = args.includes("--recompute-mat");
 
 // ─── Bitmask Definitions ────────────────────────────────────────────────────────
 export const GENRES = {
@@ -410,48 +415,7 @@ async function enrichWithTmdb(movies, cache) {
 // API response shape (confirmed):
 // { parentsGuide: [{ category: "VIOLENCE", severityBreakdowns: [{ severityLevel: "mild", voteCount: 121 }, ...], reviews: [{ text: "..." }] }] }
 
-// Map API uppercase category names → our MATURITY_CATEGORIES shift positions
-const API_CAT_TO_SHIFT = {
-  "SEXUAL_CONTENT":             0,  // sexAndNudity
-  "VIOLENCE":                   2,  // violenceAndGore
-  "PROFANITY":                  4,  // profanity
-  "ALCOHOL_DRUGS":              6,  // alcoholDrugsAndSmoking
-  "FRIGHTENING_INTENSE_SCENES": 8,  // frighteningScenes
-};
 
-const SEV_WEIGHT = { none: 1, mild: 2, moderate: 3, severe: 4 };
-
-// Compute weighted average from severityBreakdowns array → 0-3
-function weightedSeverity(severityBreakdowns) {
-  if (!Array.isArray(severityBreakdowns) || severityBreakdowns.length === 0) return null;
-  let total = 0, wsum = 0;
-  for (const { severityLevel, voteCount } of severityBreakdowns) {
-    const w = SEV_WEIGHT[severityLevel];
-    if (w == null) continue;
-    total += (voteCount || 0);
-    wsum  += (voteCount || 0) * w;
-  }
-  if (total === 0) return null;
-  return Math.round(0.2 + wsum / total) - 1; // convert 1-4 avg → 0-3
-}
-
-function parseMaturityResponse(data) {
-  const items = data?.parentsGuide;
-  if (!Array.isArray(items) || items.length === 0) return null;
-
-  let mat = 0;
-  let anyFound = false;
-  for (const item of items) {
-    const shift = API_CAT_TO_SHIFT[item.category];
-    if (shift == null) continue;
-    const sev = weightedSeverity(item.severityBreakdowns);
-    if (sev != null) {
-      mat |= (sev & 3) << shift;
-      anyFound = true;
-    }
-  }
-  return anyFound ? mat : null;
-}
 
 async function enrichWithMaturity(movies, cache) {
   const now = Date.now();
@@ -485,16 +449,18 @@ async function enrichWithMaturity(movies, cache) {
         try {
           const url = `https://api.imdbapi.dev/titles/${movie.id}/parentsGuide`;
           const data = await matLimiter.run(() => fetchJson(url));
-          const matMask = parseMaturityResponse(data);
+          const matMask = parseMaturityResponse(data, movie.year ?? null, movie.genres ?? 0);
+          // Always store the raw parentsGuide array so re-processing is possible without re-fetching
+          const rawParentsGuide = data?.parentsGuide ?? null;
           // matMask is null if we couldn't parse any data, or a number (0-1023) if parsed
           if (matMask != null) {
-            cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString(), matMask };
+            cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString(), matMask, rawParentsGuide };
           } else {
-            cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString() };
+            cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString(), rawParentsGuide };
           }
         } catch (e) {
           log(`  ✗ Mat ${movie.id}: ${e.message}`);
-          cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString() }; // mark done, no matMask
+          cache[movie.id] = { ...cache[movie.id], maturityDone: true, maturityEnrichedAt: new Date().toISOString() }; // mark done, no matMask, no rawParentsGuide
         }
       })
     );
@@ -552,6 +518,36 @@ function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache));
 }
 
+// ─── Step 4b: Recompute maturity masks from cached raw data (no network) ───────
+/**
+ * Re-runs parseMaturityResponse on every cache entry that has rawParentsGuide,
+ * updating matMask in-place. Does not touch entries without raw data.
+ * Pass the movies array so year + genreMask are available for each title.
+ *
+ * Usage: node scrape.js --recompute-mat
+ */
+function recomputeMaturityFromCache(movies, cache) {
+  // Build a quick lookup: imdbId → { year, genres }
+  const meta = new Map(movies.map((m) => [m.id, { year: m.year ?? null, genres: m.genres ?? 0 }]));
+
+  let updated = 0, skipped = 0;
+  for (const [id, entry] of Object.entries(cache)) {
+    if (!entry.rawParentsGuide) { skipped++; continue; }
+    const { year, genres } = meta.get(id) ?? { year: null, genres: 0 };
+    const matMask = parseMaturityResponse({ parentsGuide: entry.rawParentsGuide }, year, genres);
+    if (matMask != null) {
+      cache[id] = { ...entry, matMask };
+    } else {
+      // Raw data present but unscoreable: clear stale mask if any
+      const { matMask: _dropped, ...rest } = entry;
+      cache[id] = rest;
+    }
+    updated++;
+  }
+  log(`  Recomputed matMask for ${updated} entries (${skipped} skipped — no raw data).`);
+  saveCache(cache);
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -561,7 +557,13 @@ async function main() {
   const cache = loadCache();
 
   await enrichWithTmdb(movies, cache);
-  await enrichWithMaturity(movies, cache);
+
+  if (recomputeMat) {
+    log("--recompute-mat: recomputing maturity masks from cached raw data...");
+    recomputeMaturityFromCache(movies, cache);
+  } else {
+    await enrichWithMaturity(movies, cache);
+  }
 
   log("Building output JSON...");
   const output = buildOutput(movies, cache);

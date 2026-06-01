@@ -104,6 +104,7 @@
 <script setup>
 import { ref, computed, watch } from "vue";
 import { GENRES, PROVIDERS, MATURITY_CATEGORIES, SEVERITY_LABELS, getSeverity } from "@/stores/movies.js";
+import { API_CAT_TO_KEY, computeSeverity } from "@/maturity.js";
 import { useUserStore } from "@/stores/user.js";
 
 const userStore = useUserStore();
@@ -129,45 +130,34 @@ const providerNames = computed(() => {
     .map(p => p.name);
 });
 
-const API_CAT_MAP = {
-  "SEXUAL_CONTENT":             "sexAndNudity",
-  "VIOLENCE":                   "violenceAndGore",
-  "PROFANITY":                  "profanity",
-  "ALCOHOL_DRUGS":              "alcoholDrugsAndSmoking",
-  "FRIGHTENING_INTENSE_SCENES": "frighteningScenes",
-};
+// ─── Severity algorithm ─────────────────────────────────────────────────────
+// computeSeverity is imported from @/maturity.js
 
-const SEV_WEIGHTS = { none: 1, mild: 2, moderate: 3, severe: 4 };
 
-function weightedSeverity(severityBreakdowns) {
-  if (!Array.isArray(severityBreakdowns) || severityBreakdowns.length === 0) return null;
-  let total = 0, wsum = 0;
-  for (const { severityLevel, voteCount } of severityBreakdowns) {
-    const w = SEV_WEIGHTS[severityLevel];
-    if (w == null) continue;
-    total += (voteCount || 0);
-    wsum  += (voteCount || 0) * w;
-  }
-  if (total === 0) return null;
-  return Math.round(0.2 + wsum / total) - 1;
-}
+
+
+// ─── Computed parentsGuide categories ─────────────────────────────────────────
 
 const parentsGuideCategories = computed(() => {
   if (!parentsGuide.value) return [];
   const items = parentsGuide.value.parentsGuide;
   if (!Array.isArray(items)) return [];
 
-  const byKey = {};
+  const year      = props.movie?.y   ?? null;
+  const genreMask = props.movie?.g   ?? 0;
+
+  const byCat = {};
   for (const entry of items) {
-    const key = API_CAT_MAP[entry.category];
-    if (key) byKey[key] = entry;
+    if (entry.category) byCat[entry.category] = entry;
   }
 
   return MATURITY_CATEGORIES.map(cat => {
-    const entry = byKey[cat.key];
+    // Find the API entry whose key maps to this category
+    const apiKey = Object.keys(API_CAT_TO_KEY).find(k => API_CAT_TO_KEY[k] === cat.key);
+    const entry  = apiKey ? byCat[apiKey] : null;
     if (!entry) return { ...cat, severity: null, items: [] };
-    const severity = weightedSeverity(entry.severityBreakdowns);
-    const reviews = (entry.reviews ?? []).map(r => r.text).filter(Boolean);
+    const severity = computeSeverity(entry.severityBreakdowns, apiKey, year, genreMask);
+    const reviews  = (entry.reviews ?? []).map(r => r.text).filter(Boolean);
     return { ...cat, severity, items: reviews };
   });
 });
