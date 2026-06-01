@@ -15,6 +15,16 @@
           <div class="modal-meta">
             <span class="modal-year">{{ movie.y }}</span>
             <span class="modal-rating">★ {{ movie.r?.toFixed(1) }}</span>
+            <a
+              v-if="movie.id"
+              :href="`https://www.imdb.com/title/${movie.id}/`"
+              target="_blank"
+              rel="noopener"
+              class="imdb-link"
+              title="View on IMDb"
+            >
+              <img src="https://upload.wikimedia.org/wikipedia/commons/6/69/IMDB_Logo_2016.svg" alt="IMDb" class="imdb-logo" />
+            </a>
             <span v-if="movie.s" class="modal-badge">TV Season</span>
           </div>
           <h2 class="modal-title">{{ movie.t }}</h2>
@@ -78,13 +88,7 @@
             <p class="modal-section-label">Available on</p>
             <div class="provider-list">
               <span v-for="p in providerNames" :key="p" class="provider-chip">{{ p }}</span>
-              <span
-              :href="`https://www.imdb.com/title/${movie.id}/`"
-              target="_blank"
-              rel="noopener"
-              style="cursor: pointer;"
-              class="provider-chip"
-              >IMDb ↗</span>
+
             </div>
           </div>
         </div>
@@ -137,11 +141,11 @@ function weightedSeverity(severityBreakdowns) {
   for (const { severityLevel, voteCount } of severityBreakdowns) {
     const w = SEV_WEIGHTS[severityLevel];
     if (w == null) continue;
-    total += voteCount;
-    wsum  += voteCount * w;
+    total += (voteCount || 0);
+    wsum  += (voteCount || 0) * w;
   }
   if (total === 0) return null;
-  return Math.round(wsum / total) - 1;
+  return Math.round(0.2 + wsum / total) - 1;
 }
 
 const parentsGuideCategories = computed(() => {
@@ -260,6 +264,8 @@ watch(() => props.movie?.id, (id) => {
 }
 .modal-year { font-size: 13px; color: var(--muted); }
 .modal-rating { font-size: 14px; font-weight: 500; color: var(--gold); }
+.imdb-link { display: inline-flex; align-items: center; text-decoration: none; }
+.imdb-logo { height: 12px; width: auto; border-radius: 2px; }
 .modal-badge {
   font-size: 10px;
   text-transform: uppercase;

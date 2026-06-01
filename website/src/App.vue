@@ -318,7 +318,7 @@ onMounted(async () => {
   position: fixed;
   top: 16px;
   right: 16px;
-  z-index: 150;
+  z-index: 10;
   background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: 50%;

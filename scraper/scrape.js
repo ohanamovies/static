@@ -403,11 +403,11 @@ function weightedSeverity(severityBreakdowns) {
   for (const { severityLevel, voteCount } of severityBreakdowns) {
     const w = SEV_WEIGHT[severityLevel];
     if (w == null) continue;
-    total += voteCount;
-    wsum  += voteCount * w;
+    total += (voteCount || 0);
+    wsum  += (voteCount || 0) * w;
   }
   if (total === 0) return null;
-  return Math.round(wsum / total) - 1; // convert 1-4 avg → 0-3
+  return Math.round(0.2 + wsum / total) - 1; // convert 1-4 avg → 0-3
 }
 
 function parseMaturityResponse(data) {

@@ -1,5 +1,5 @@
 const BASE = "https://wqk4qyf5b3hpec5u4hiv7j3qiq0tlcpp.lambda-url.eu-west-1.on.aws/";
-const LOCAL = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+const LOCAL = false//["localhost", "127.0.0.1"].includes(window.location.hostname);
 
 const LS_PREFIX = "ohanatv_kv_";
 
@@ -24,6 +24,7 @@ export async function kvWrite(token, data) {
     headers: { "x-write-token": token, "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
+  console.log(res)
   if (!res.ok) throw new Error(`kvWrite ${res.status}`);
 }
 

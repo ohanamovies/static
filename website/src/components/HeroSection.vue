@@ -22,34 +22,35 @@
       <!-- Wordmark -->
       <div class="hero-brand">
         <span class="hero-logo">Ohana TV</span>
-        <span class="hero-tagline">Family friendly movies.</span>
-      </div>
-
-      <!-- Search -->
-      <div class="hero-search-wrap">
-        <div class="hero-search">
-          <svg class="search-icon" viewBox="0 0 20 20" fill="none">
-            <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          <input
-            v-model="store.searchQuery"
-            type="search"
-            placeholder="Search by title…"
-            class="search-input"
-            spellcheck="false"
-          />
-          <transition name="fade">
-            <span v-if="store.searchQuery" class="search-results-count">
-              {{ store.filteredMovies.length }} results
-            </span>
-          </transition>
-        </div>
+        <span class="hero-tagline">Healthy & family friendly movies.</span>
       </div>
 
       <!-- Filters (hidden when searching) -->
       <transition name="slide-filters">
         <div class="filters" v-show="!store.searchQuery">
+
+          <!-- Per-category maturity filter (top) -->
+          <div class="filter-group">
+            <p class="filter-label">Max maturity per category</p>
+            <div class="mat-cat-grid">
+              <div
+                v-for="(cat, catIdx) in MATURITY_CATEGORIES"
+                :key="cat.key"
+                class="mat-cat-row"
+              >
+                <span class="mat-cat-name">{{ cat.label }}</span>
+                <div class="filter-chips">
+                  <button
+                    v-for="(label, sev) in SEVERITY_LABELS"
+                    :key="sev"
+                    class="chip chip--maturity chip--sm"
+                    :class="[`chip--sev-${sev}`, { active: store.maxMaturityCat[catIdx] === sev }]"
+                    @click="store.setMaxMaturityCat(catIdx, sev)"
+                  >{{ label }}</button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <!-- Genres -->
           <div class="filter-group filter-group--full">
@@ -79,45 +80,43 @@
             </div>
           </div>
 
-          <!-- Rating -->
-          <div class="filter-group filter-group--rating">
-            <p class="filter-label">Min IMDb rating</p>
-            <div class="rating-slider-wrap">
-              <input
-                type="range"
-                min="0" max="10" step="0.5"
-                v-model.number="store.minRating"
-                class="rating-slider"
-              />
-              <span class="rating-value">{{ store.minRating === 0 ? 'All' : `${store.minRating}+` }}</span>
-            </div>
-          </div>
-
-          <!-- Per-category maturity filter -->
-          <div class="filter-group">
-            <p class="filter-label">Max maturity per category</p>
-            <div class="mat-cat-grid">
-              <div
-                v-for="(cat, catIdx) in MATURITY_CATEGORIES"
-                :key="cat.key"
-                class="mat-cat-row"
-              >
-                <span class="mat-cat-name">{{ cat.label }}</span>
-                <div class="filter-chips">
-                  <button
-                    v-for="(label, sev) in SEVERITY_LABELS"
-                    :key="sev"
-                    class="chip chip--maturity chip--sm"
-                    :class="[`chip--sev-${sev}`, { active: store.maxMaturityCat[catIdx] === sev }]"
-                    @click="store.setMaxMaturityCat(catIdx, sev)"
-                  >{{ label }}</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
         </div>
       </transition>
+
+      <!-- Search + IMDb rating row (always visible, at bottom) -->
+      <div class="hero-bottom-row">
+        <div class="hero-search">
+          <svg class="search-icon" viewBox="0 0 20 20" fill="none">
+            <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <input
+            v-model="store.searchQuery"
+            type="search"
+            placeholder="Search by title…"
+            class="search-input"
+            spellcheck="false"
+          />
+          <transition name="fade">
+            <span v-if="store.searchQuery" class="search-results-count">
+              {{ store.filteredMovies.length }} results
+            </span>
+          </transition>
+        </div>
+
+        <div class="filter-group filter-group--rating">
+          <p class="filter-label">Min IMDb rating</p>
+          <div class="rating-slider-wrap">
+            <input
+              type="range"
+              min="0" max="10" step="0.5"
+              v-model.number="store.minRating"
+              class="rating-slider"
+            />
+            <span class="rating-value">{{ store.minRating === 0 ? 'All' : `${store.minRating}+` }}</span>
+          </div>
+        </div>
+      </div>
 
       <!-- Active filter summary + clear -->
       <div class="filter-summary" v-if="hasFilters">
@@ -189,7 +188,7 @@ const hasFilters = computed(() =>
   aspect-ratio: 2/3;
   object-fit: cover;
   border-radius: 4px;
-  opacity: 0.45;
+  opacity: 0.65;
   display: block;
   flex-shrink: 0;
 }
@@ -199,10 +198,10 @@ const hasFilters = computed(() =>
   inset: 0;
   z-index: 1;
   background:
-    linear-gradient(135deg, rgba(232,54,93,0.22) 0%, transparent 55%),
-    linear-gradient(225deg, rgba(45,212,191,0.14) 0%, transparent 50%),
-    radial-gradient(ellipse 90% 70% at 50% 20%, rgba(8,8,16,0.4) 0%, transparent 100%),
-    linear-gradient(to bottom, rgba(8,8,16,0.15) 0%, rgba(8,8,16,0.75) 65%, var(--black) 100%);
+    linear-gradient(135deg, rgba(232,54,93,0.32) 0%, transparent 55%),
+    linear-gradient(225deg, rgba(45,212,191,0.20) 0%, transparent 50%),
+    radial-gradient(ellipse 90% 70% at 50% 20%, rgba(8,8,16,0.25) 0%, transparent 100%),
+    linear-gradient(to bottom, rgba(8,8,16,0.05) 0%, rgba(8,8,16,0.60) 60%, var(--black) 100%);
   pointer-events: none;
 }
 
@@ -227,24 +226,28 @@ const hasFilters = computed(() =>
   font-size: clamp(52px, 8vw, 96px);
   letter-spacing: 0.1em;
   line-height: 1;
-  color: #a7f3d0;
-  text-shadow: 0 2px 32px rgba(52,211,153,0.25);
+  color: #2ecc5a;
+  text-shadow: 0 2px 40px rgba(52,211,153,0.55), 0 0 80px rgba(52,211,153,0.2);
 }
 
 .hero-tagline {
   font-size: 15px;
-  color: var(--muted);
+  color: rgba(255,255,255,0.65);
   font-style: italic;
 }
 
-/* ── Search ── */
-.hero-search-wrap {
-  margin-bottom: 36px;
+/* ── Bottom row: search + IMDb rating ── */
+.hero-bottom-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  margin-top: 32px;
+  flex-wrap: wrap;
 }
 
 .hero-search {
   position: relative;
-  max-width: 560px;
+  max-width: 780px;
   display: flex;
   align-items: center;
 }
@@ -260,7 +263,9 @@ const hasFilters = computed(() =>
 
 .search-input {
   width: 100%;
-  padding: 14px 16px 14px 48px;
+  min-width: 480px;
+  max-width: 100%;
+  padding: 10px 12px 10px 36px;
   background: rgba(15,15,26,0.85);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -302,7 +307,7 @@ const hasFilters = computed(() =>
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--muted);
+  color: rgba(255,255,255,0.55);
 }
 
 .filter-chips {
@@ -318,10 +323,10 @@ const hasFilters = computed(() =>
 
 .chip {
   padding: 5px 12px;
-  background: rgba(22,22,31,0.8);
-  border: 1px solid var(--border);
+  background: rgba(22,22,31,0.85);
+  border: 1px solid rgba(255,255,255,0.15);
   border-radius: 99px;
-  color: var(--muted);
+  color: rgba(255,255,255,0.6);
   font-family: var(--font-body);
   font-size: 12px;
   cursor: pointer;
@@ -465,7 +470,7 @@ const hasFilters = computed(() =>
 
   .hero-brand { flex-direction: column; gap: 4px; margin-bottom: 24px; }
 
-  .hero-search-wrap { margin-bottom: 24px; }
+  .hero-bottom-row { gap: 16px; margin-top: 20px; }
 
   .filters { gap: 20px; }
 
