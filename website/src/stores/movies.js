@@ -85,6 +85,11 @@ export const useMovieStore = defineStore("movies", () => {
   // Per-category max severity: index matches MATURITY_CATEGORIES order, -1 = no filter
   const maxMaturityCat = ref([-1, -1, -1, -1, -1]);
 
+  const maturityScore = (a) => {
+    let s = [ 2, 1.5, 0.5, 0.1][getSeverity(a.mat ?? 3, 0)] || 0.5
+    return s
+  };
+
   let fuse = null;
 
   // ── Load data ─────────────────────────────────────────────
@@ -92,7 +97,7 @@ export const useMovieStore = defineStore("movies", () => {
     loading.value = true;
     error.value = null;
     try {
-      const res = await fetch("movies.json");
+      const res = await fetch("https://ohana.tv/movies.json");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       allMovies.value = data.movies || generateMockMovies();
@@ -170,7 +175,7 @@ export const useMovieStore = defineStore("movies", () => {
       });
     } else {
       pool.sort((a, b) =>
-        (b.item.pop || 0) * b.item.r - (a.item.pop || 0) * a.item.r
+        (b.item.pop || 0) * b.item.r * maturityScore(b.item) - (a.item.pop || 0) * a.item.r * maturityScore(a.item)
       );
     }
 
@@ -183,15 +188,15 @@ export const useMovieStore = defineStore("movies", () => {
     if (pool.length === 0) return [];
 
     const rows = [];
-    const byPopRating = (a, b) => (b.pop || 0) * b.r - (a.pop || 0) * a.r;
+    const byPopRating = (a, b) => (b.pop || 0) * b.r * maturityScore(b) - (a.pop || 0) * a.r * maturityScore(a);
 
     const ROW_MAX = 200;
 
-    const topRated = [...pool].sort((a, b) => b.r - a.r).slice(0, ROW_MAX);
+    const topRated = [...pool].sort((a, b) => b.r * maturityScore(b) - a.r * maturityScore(a)).slice(0, ROW_MAX);
     if (topRated.length >= 4)
       rows.push({ id: "top-rated", label: "Top Rated", movies: topRated });
 
-    const trending = [...pool].sort((a, b) => (b.pop || 0) - (a.pop || 0)).slice(0, ROW_MAX);
+    const trending = [...pool].sort((a, b) => (b.pop || 0) * maturityScore(b) - (a.pop || 0) * maturityScore(a)).slice(0, ROW_MAX);
     if (trending.length >= 4)
       rows.push({ id: "trending", label: "Trending Now", movies: trending });
 
