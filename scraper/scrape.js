@@ -5,10 +5,12 @@
  * 1. Downloads IMDb title.basics + title.ratings datasets
  * 2. Filters top 50k movies+tvSeasons by vote count + rating
  * 3. Enriches with TMDB data (poster URL, providers, popularity, TMDB id,
- *    English + Spanish synopsis, Spanish title)
+ *    English + Spanish synopsis, Spanish title, origin countries)
  *    - Runs incrementally: skips recently-enriched movies
  *    - Re-enriches stale entries (older than --recrawl-days, default 30d), oldest-first
  *    - Respects TMDB rate limits (40 req/10s)
+ *    - Fetches MPA/TV-rating for both movies AND TV seasons
+ *    - Filters out titles whose origin country is India (IN) or China (CN)
  * 4. Enriches with IMDb parentsGuide maturity data
  * 5. Enriches with Common Sense Media (recommendedAge, CSM rating, parentsNeedToKnow,
  *    content grid scores). Loops a–z × all pages; matches by title + year.
@@ -39,7 +41,7 @@ const OUTPUT_FILE = path.join(OUT_DIR, "movies.json");
 const EXTRA_FILE = path.join(OUT_DIR, "extra.json");
 const IMDB_BASICS_URL = "https://datasets.imdbws.com/title.basics.tsv.gz";
 const IMDB_RATINGS_URL = "https://datasets.imdbws.com/title.ratings.tsv.gz";
-const TOP_N = 50_000;
+const TOP_N = 100_000;
 const TMDB_RATE_LIMIT = 40; // requests per window
 const TMDB_RATE_WINDOW = 2_000; // ms
 const MAT_RATE_LIMIT = 8; // imdbapi.dev rate limit per window
@@ -309,7 +311,7 @@ async function buildTopN() {
     };
     allTitlesMap.set(row.tconst, entry);
     // Apply quality filter for the main ranked list
-    if (r.votes >= 1000 && r.rating >= 5) titles.push(entry);
+    if (r.votes >= 500 && r.rating >= 5) titles.push(entry);
   });
 
   log(`Found ${titles.length} titles passing quality filter (movies + TV seasons). Sorting by votes × rating...`);
@@ -328,10 +330,8 @@ async function enrichWithTmdb(movies, cache) {
 
   const now = Date.now();
   // A cache entry is stale if it has never been enriched, or its timestamp is older than RECRAWL_MS.
-  // Entries with legacy `enriched: true` but no `tmdbEnrichedAt` are treated as epoch 0 (always stale).
   const needsEnrichment = (m) => {
     const c = cache[m.id];
-    if (!c?.enriched) return true;
     const ts = c.tmdbEnrichedAt ? new Date(c.tmdbEnrichedAt).getTime() : 0;
     return now - ts > RECRAWL_MS;
   };
@@ -367,6 +367,7 @@ async function enrichWithTmdb(movies, cache) {
           let overviewEn = null;
           let overviewEs = null;
           let titleEs = null;
+          let originCountries = null;
 
           if (movie.isSeason) {
             // TV Season: use tv_season_results
@@ -378,12 +379,14 @@ async function enrichWithTmdb(movies, cache) {
               tmdbId = tvSeason.id ?? null;
               overviewEn = tvSeason.overview || null;
               const showId = tvSeason.show_id;
-              // Get popularity from the parent show
+              // Get popularity + origin countries from the parent show (single request)
+              let showData = null;
               try {
                 const showUrl = `https://api.themoviedb.org/3/tv/${showId}?api_key=${TMDB_KEY}`;
-                const showData = await tmdbLimiter.run(() => fetchJson(showUrl));
+                showData = await tmdbLimiter.run(() => fetchJson(showUrl));
                 popularity = Math.round((showData.popularity ?? 0) * 10) / 10;
               } catch (_) {}
+              originCountries = showData?.origin_country ?? null;
               // Get watch providers for the TV show
               try {
                 const provUrl = `https://api.themoviedb.org/3/tv/${showId}/watch/providers?api_key=${TMDB_KEY}`;
@@ -426,7 +429,12 @@ async function enrichWithTmdb(movies, cache) {
                   }
                 }
               } catch (_) {}
-              // Fetch Spanish translation for overview + title
+              // Fetch Spanish translation for overview + title + origin countries (single details call)
+              try {
+                const detailsUrl = `https://api.themoviedb.org/3/movie/${tmdbId}?api_key=${TMDB_KEY}`;
+                const details = await tmdbLimiter.run(() => fetchJson(detailsUrl));
+                originCountries = details.origin_country ?? details.production_countries?.map((c) => c.iso_3166_1) ?? null;
+              } catch (_) {}
               try {
                 const transUrl = `https://api.themoviedb.org/3/movie/${tmdbId}/translations?api_key=${TMDB_KEY}`;
                 const transData = await tmdbLimiter.run(() => fetchJson(transUrl));
@@ -458,12 +466,25 @@ async function enrichWithTmdb(movies, cache) {
                 mpaCertification = (cert && cert !== "NR" && cert !== "Not Rated") ? cert : null;
               }
             } catch (_) {}
+          } else if (tmdbId && movie.isSeason) {
+            // For TV seasons, fetch content ratings from the parent show
+            try {
+              const tvSeason = findData.tv_season_results?.[0];
+              const showId = tvSeason?.show_id;
+              if (showId) {
+                const ratingsUrl = `https://api.themoviedb.org/3/tv/${showId}/content_ratings?api_key=${TMDB_KEY}`;
+                const ratingsData = await tmdbLimiter.run(() => fetchJson(ratingsUrl));
+                const usRating = ratingsData.results?.find((r) => r.iso_3166_1 === "US");
+                const cert = usRating?.rating?.trim() ?? null;
+                mpaCertification = (cert && cert !== "NR" && cert !== "Not Rated") ? cert : null;
+              }
+            } catch (_) {}
           }
 
-          cache[movie.id] = { enriched: true, tmdbEnrichedAt: new Date().toISOString(), tmdbId, poster, popularity, providerMask, overviewEn, overviewEs, titleEs, mpaCertification };
+          cache[movie.id] = { enriched: true, tmdbEnrichedAt: new Date().toISOString(), tmdbId, poster, popularity, providerMask, overviewEn, overviewEs, titleEs, mpaCertification, originCountries };
         } catch (e) {
           log(`  ✗ TMDB ${movie.id}: ${e.message}`);
-          cache[movie.id] = { enriched: true, tmdbEnrichedAt: new Date().toISOString(), tmdbId: null, poster: null, popularity: 0, providerMask: 0, overviewEn: null, overviewEs: null, titleEs: null, mpaCertification: null };
+          cache[movie.id] = { enriched: true, tmdbEnrichedAt: new Date().toISOString(), tmdbId: null, poster: null, popularity: 0, providerMask: 0, overviewEn: null, overviewEs: null, titleEs: null, mpaCertification: null, originCountries: null };
         }
       })
     );
@@ -779,12 +800,22 @@ function countProviders(mask) {
   return mask.toString(2).split('1').length - 1;
 }
 
+// Countries whose content is excluded from the output
+const EXCLUDED_COUNTRIES = new Set(["IN", "CN"]);
+
+/** Returns true if the cache entry's originCountries includes an excluded country */
+function isExcludedOrigin(c) {
+  if (!c?.originCountries?.length) return false;
+  return c.originCountries.some((cc) => EXCLUDED_COUNTRIES.has(cc));
+}
+
 // ─── Step 6: Merge and output ──────────────────────────────────────────────────
 async function buildOutput(movies, cache, modelDir) {
   const extraLookup = {};
   const output = [];
   const total = movies.length;
   let matComputed = 0, matSkipped = 0, matErrors = 0;
+  let excludedCount = 0;
   const LOG_EVERY = 500;
 
   log(`Building output for ${total} movies...`);
@@ -792,19 +823,26 @@ async function buildOutput(movies, cache, modelDir) {
   for (let idx = 0; idx < movies.length; idx++) {
     const m = movies[idx];
     const c = cache[m.id] || {};
-    const availability = 0.1+countProviders(c.providerMask)
+
+    // Skip titles from excluded countries (India, China)
+    if (isExcludedOrigin(c)) {
+      excludedCount++;
+      continue;
+    }
+
+    const availability = 0.1 + countProviders(c.providerMask);
     const entry = {
       id: m.id,
       t: m.title,
       y: m.year,
       r: m.rating,
       g: m.genres,
-      pop: c.popularity * availability ?? 0,
+      pop: (c.popularity ?? 0) * availability,
       p: c.poster ?? undefined,
       prov: c.providerMask ?? 0,
       mpa: c.mpaCertification ?? undefined,
-      csm: c.csm?.csmUrl ?? undefined,
       mat: c.mat,
+      ts: c.titleEs ?? undefined,
     };
     if (m.isSeason) entry.s = 1;
 
@@ -815,18 +853,19 @@ async function buildOutput(movies, cache, modelDir) {
     // Use the IMDb ID as a direct lookup key
     extraLookup[m.id] = {
       synopsisEn: c.overviewEn ?? undefined,
+      csm: c.csm?.csmUrl ?? undefined,
       tmdbUrl: c.tmdbId 
       ? `https://www.themoviedb.org/${m.isSeason ? 'tv' : 'movie'}/${c.tmdbId}`
       : undefined
     };
   }
 
-  log(`buildOutput complete: ${output.length} entries`);
+  log(`buildOutput complete: ${output.length} entries (${excludedCount} excluded by origin country).`);
 
   
   fs.writeFileSync(EXTRA_FILE, JSON.stringify(extraLookup));
   const size = (fs.statSync(EXTRA_FILE).size / 1024).toFixed(1);
-  log(`✓ Written ${EXTRA_FILE} (${size} KB, ${extraLookup.length} titles)`);
+  log(`✓ Written ${EXTRA_FILE} (${size} KB, ${Object.keys(extraLookup).length} titles)`);
 
   
   return {

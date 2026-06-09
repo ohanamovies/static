@@ -218,16 +218,22 @@ def build_records(cache, movies_meta=None, min_guide_votes=0):
 
         # TEXT STRATAGEM
         txt_pieces = []
-        for key in ["overviewEn", "overviewEs", "title", "titleOriginal"]:
-            if c.get(key): txt_pieces.append(str(c[key]))
-        if isinstance(c.get("rawReviews"), list):
-            for rev in c["rawReviews"]:
-                if isinstance(rev, dict) and rev.get("text"):
-                    txt_pieces.append(str(rev["text"]))
+        for key in ["title"]:
+            if c.get(key):
+                txt_pieces.append(str(c[key]))
+
+        if isinstance(raw_guide, list):
+            for entry in raw_guide:                        # entry = {category, reviews, ...}
+                if isinstance(entry.get("reviews"), list):
+                    for rev in entry["reviews"]:           # rev = {"text": "..."}
+                        if isinstance(rev, dict) and rev.get("text"):
+                            txt_pieces.append(str(rev["text"]))
+
         if isinstance(csm, dict):
             for key in ["parentsNeedToKnow", "oneLiner"]:
-                if csm.get(key): txt_pieces.append(str(csm[key]))
-                
+                if csm.get(key):
+                    txt_pieces.append(str(csm[key]))
+
         synopses.append(" ".join(txt_pieces).strip())
 
     return records, synopses

@@ -89,8 +89,8 @@
                   title="IMDb Parents Guide"
                 >IMDb guide</a>
                 <a
-                  v-if="movie.csm"
-                  :href="'https://www.commonsensemedia.org'+movie.csm"
+                  v-if="extraDetails.csm"
+                  :href="'https://www.commonsensemedia.org'+extraDetails.csm"
                   target="_blank" rel="noopener"
                   class="mat-ext-link mat-ext-link--csm"
                   title="Common Sense Media review"

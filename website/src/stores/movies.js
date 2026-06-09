@@ -176,7 +176,7 @@ export const useMovieStore = defineStore("movies", () => {
 
     const trending = [...pool].sort((a, b) => (b.pop || 0) * maturityScore(b) - (a.pop || 0) * maturityScore(a)).slice(0, ROW_MAX);
     if (trending.length >= 4)
-      rows.push({ id: "trending", label: "Trending Now", movies: trending });
+      rows.push({ id: "trending", label: "Most popular", movies: trending });
 
     for (const [genre, mask] of Object.entries(GENRES)) {
       const genreMovies = pool
