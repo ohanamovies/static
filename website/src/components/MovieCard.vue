@@ -125,7 +125,7 @@ const posterStyle = computed(() => ({
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  opacity: 0;
+  opacity: 0.8;
   transition: opacity 0.2s ease;
 }
 

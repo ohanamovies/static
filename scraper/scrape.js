@@ -330,8 +330,10 @@ async function enrichWithTmdb(movies, cache) {
 
   const now = Date.now();
   // A cache entry is stale if it has never been enriched, or its timestamp is older than RECRAWL_MS.
+  // Entries with legacy `enriched: true` but no `tmdbEnrichedAt` are treated as epoch 0 (always stale).
   const needsEnrichment = (m) => {
     const c = cache[m.id];
+    if (!c?.enriched) return true;
     const ts = c.tmdbEnrichedAt ? new Date(c.tmdbEnrichedAt).getTime() : 0;
     return now - ts > RECRAWL_MS;
   };
@@ -830,14 +832,13 @@ async function buildOutput(movies, cache, modelDir) {
       continue;
     }
 
-    const availability = 0.1 + countProviders(c.providerMask);
     const entry = {
       id: m.id,
       t: m.title,
       y: m.year,
       r: m.rating,
       g: m.genres,
-      pop: (c.popularity ?? 0) * availability,
+      pop: Math.sqrt(c.popularity ?? 0),
       p: c.poster ?? undefined,
       prov: c.providerMask ?? 0,
       mpa: c.mpaCertification ?? undefined,
