@@ -202,9 +202,9 @@ def build_records(cache, movies_meta=None, min_guide_votes=0):
         genres = meta.get("genres") or c.get("genres") or 0
         row.update(decode_genres(genres))
         
-        year = row["year"]
-        try: row["decade"] = (int(year) // 10) * 10 if year else 1990
-        except: row["decade"] = 1990
+        raw_year = row["year"]
+        year_val = raw_year if pd.notna(raw_year) else 2000
+        year = np.clip(year_val - 2000, 0, 30)  # score drift over the years
 
         mpa = c.get("mpaCertification")
         row["mpa_ordinal"] = MPA_ORDINAL.get(mpa) if mpa else None
@@ -557,7 +557,9 @@ def _run_tabnet(X_train_np, y_train_np, X_test_np, y_test,
     return clf_tn, tn_int, tn_ev
 
 
-def train_one(df, target_col, model_dir, tune=False, tune_iter=25):
+VALID_MODELS = {"regressor", "clf_argmax"}#, "clf_expected_val", "ordinal_mlp", "tabnet"}
+
+def train_one(df, target_col, model_dir, tune=False, tune_iter=25, models=None):
     valid = df[df[target_col].notna()].copy()
     if len(valid) < 100:
         print(f"  ⚠  {target_col}: only {len(valid)} labelled rows, skipping.")
@@ -576,6 +578,9 @@ def train_one(df, target_col, model_dir, tune=False, tune_iter=25):
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.15, stratify=y, random_state=42
     )
+
+    # Which model variants to run (default: all)
+    run = set(models) if models else VALID_MODELS
 
     max_val   = int(y.max())
     n_classes = max_val + 1   # ratings 0..max_val
@@ -611,87 +616,108 @@ def train_one(df, target_col, model_dir, tune=False, tune_iter=25):
 
     # Only using LightGBM formats for deployment ease with the predict macro script
     # ── Baseline: Regressor + spread multiplier ────────────
-    reg = lgb.LGBMRegressor(**shared_params)
-    reg.fit(X_train, y_train, eval_set=[(X_test, y_test)], callbacks=[lgb.early_stopping(80, verbose=False)])
+    if "regressor" in run:
+        reg = lgb.LGBMRegressor(**shared_params)
+        reg.fit(X_train, y_train, eval_set=[(X_test, y_test)], callbacks=[lgb.early_stopping(80, verbose=False)])
 
-    raw_preds        = np.clip(reg.predict(X_test), 0, max_val)
-    dataset_mean     = 2.2
-    spread_multiplier = 1.3
-    spread_preds     = np.clip(dataset_mean + (raw_preds - dataset_mean) * spread_multiplier, 0, max_val)
-    reg_int          = np.round(spread_preds).astype(int)
-    reg_mae, reg_mse, reg_qwk, reg_acc, reg_err_dist, reg_entropy = _eval_preds(
-        y_test, reg_int, spread_preds, max_val, "Regressor + spread (baseline)")
+        raw_preds = np.clip(reg.predict(X_test), 0, max_val)
+        # Use the actual training-set mean so the spread is centred correctly.
+        # A hardcoded value shifts predictions for targets whose distribution
+        # differs from the assumed mean (e.g. csm_drugs is very left-skewed
+        # while csm_violence is more uniform).
+        dataset_mean      = float(y_train.mean())
+        spread_multiplier = 1.2
+        spread_preds      = np.clip(dataset_mean + (raw_preds - dataset_mean) * spread_multiplier, 0, max_val)
+        reg_int           = np.round(spread_preds).astype(int)
+        reg_mae, reg_mse, reg_qwk, reg_acc, reg_err_dist, reg_entropy = _eval_preds(
+            y_test, reg_int, spread_preds, max_val, "Regressor + spread (baseline)")
+    else:
+        reg = reg_mae = reg_mse = reg_qwk = reg_acc = reg_err_dist = reg_entropy = None
+        spread_preds = reg_int = None
 
     # ── Option A: Multiclass — argmax ──────────────────────────────────────────
-    clf = lgb.LGBMClassifier(objective="multiclass", num_class=n_classes, **shared_params)
-    clf.fit(X_train, y_train,
-            eval_set=[(X_test, y_test)],
-            callbacks=[lgb.early_stopping(80, verbose=False)])
+    need_clf = ("clf_argmax" in run) or ("clf_expected_val" in run)
+    if need_clf:
+        clf = lgb.LGBMClassifier(objective="multiclass", num_class=n_classes, **shared_params)
+        clf.fit(X_train, y_train,
+                eval_set=[(X_test, y_test)],
+                callbacks=[lgb.early_stopping(80, verbose=False)])
+        probs = clf.predict_proba(X_test)          # shape (n, n_classes)
+    else:
+        clf = probs = None
 
-    probs      = clf.predict_proba(X_test)          # shape (n, n_classes)
-    clf_argmax = probs.argmax(axis=1).astype(int)
-    clf_mae_am, clf_mse_am, clf_qwk_am, clf_acc_am, clf_err_dist_am, clf_entropy_am = _eval_preds(
-        y_test, clf_argmax, clf_argmax.astype(float), max_val, "Classifier — argmax")
+    if "clf_argmax" in run:
+        clf_argmax = probs.argmax(axis=1).astype(int)
+        clf_mae_am, clf_mse_am, clf_qwk_am, clf_acc_am, clf_err_dist_am, clf_entropy_am = _eval_preds(
+            y_test, clf_argmax, clf_argmax.astype(float), max_val, "Classifier — argmax")
+    else:
+        clf_argmax = clf_mae_am = clf_mse_am = clf_qwk_am = clf_acc_am = clf_err_dist_am = clf_entropy_am = None
 
     # ── Option B: Multiclass — expected value ──────────────────────────────────
-    # Soft prediction: weighted average over class probabilities.
-    # Rounds to nearest int for QWK/Exact, but uses the float for MAE/MSE.
-    # Often gives lower MAE than argmax on skewed distributions.
-    clf_ev      = (probs * classes).sum(axis=1)     # expected value, float
-    clf_ev_int  = np.clip(np.round(clf_ev), 0, max_val).astype(int)
-    clf_mae_ev, clf_mse_ev, clf_qwk_ev, clf_acc_ev, clf_err_dist_ev, clf_entropy_ev = _eval_preds(
-        y_test, clf_ev_int, clf_ev, max_val, "Classifier — expected value")
+    if "clf_expected_val" in run:
+        clf_ev     = (probs * classes).sum(axis=1)
+        clf_ev_int = np.clip(np.round(clf_ev), 0, max_val).astype(int)
+        clf_mae_ev, clf_mse_ev, clf_qwk_ev, clf_acc_ev, clf_err_dist_ev, clf_entropy_ev = _eval_preds(
+            y_test, clf_ev_int, clf_ev, max_val, "Classifier — expected value")
+    else:
+        clf_ev = clf_ev_int = clf_mae_ev = clf_mse_ev = clf_qwk_ev = clf_acc_ev = clf_err_dist_ev = clf_entropy_ev = None
 
     # ── Shared preprocessing for neural models ───────────────────────────────────
     # Impute + StandardScale on a copy; trees already handle NaNs natively.
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.impute import SimpleImputer
-    import torch
+    need_nn = ("ordinal_mlp" in run) or ("tabnet" in run)
+    if need_nn:
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.impute import SimpleImputer
+        import torch
 
-    # Drop columns that are entirely NaN in the training set — imputer can't
-    # handle them and they carry no information for the neural models.
-    X_train_nn_df = X_train.copy()
-    X_test_nn_df  = X_test.copy()
-    all_nan_cols  = [c for c in X_train_nn_df.columns
-                     if X_train_nn_df[c].isna().all()]
-    if all_nan_cols:
-        X_train_nn_df = X_train_nn_df.drop(columns=all_nan_cols)
-        X_test_nn_df  = X_test_nn_df.drop(columns=all_nan_cols)
+        X_train_nn_df = X_train.copy()
+        X_test_nn_df  = X_test.copy()
+        all_nan_cols  = [c for c in X_train_nn_df.columns
+                         if X_train_nn_df[c].isna().all()]
+        if all_nan_cols:
+            X_train_nn_df = X_train_nn_df.drop(columns=all_nan_cols)
+            X_test_nn_df  = X_test_nn_df.drop(columns=all_nan_cols)
 
-    imputer = SimpleImputer(strategy="median")
-    scaler  = StandardScaler()
-    X_tr_nn = scaler.fit_transform(imputer.fit_transform(X_train_nn_df.values.astype(np.float32)))
-    X_te_nn = scaler.transform(imputer.transform(X_test_nn_df.values.astype(np.float32)))
+        imputer = SimpleImputer(strategy="median")
+        scaler  = StandardScaler()
+        X_tr_nn = scaler.fit_transform(imputer.fit_transform(X_train_nn_df.values.astype(np.float32)))
+        X_te_nn = scaler.transform(imputer.transform(X_test_nn_df.values.astype(np.float32)))
 
-    device_str = "cuda" if torch.cuda.is_available() else "cpu"
-    device     = torch.device(device_str)
-    cw_tensor  = _get_class_weights_tensor(y_train.values, n_classes, device)
-    cw_np      = cw_tensor.cpu().numpy()
+        device_str = "cuda" if torch.cuda.is_available() else "cpu"
+        device     = torch.device(device_str)
+        cw_tensor  = _get_class_weights_tensor(y_train.values, n_classes, device)
+        cw_np      = cw_tensor.cpu().numpy()
 
     # ── Option C: Ordinal MLP ──────────────────────────────────────────────────
-    print(f"    training OrdinalMLP on {device_str}...")
-    mlp = _OrdinalMLP(
-        n_features=X_tr_nn.shape[1],   # may differ from X_train if all-NaN cols dropped
-        n_classes=n_classes,
-        device=device_str,
-        hidden=(512, 256),
-        dropout=(0.3, 0.2),
-        lr=1e-3,
-        weight_decay=1e-4,
-        epochs=150,
-        batch_size=256,
-        patience=20,
-    )
-    mlp.fit(X_tr_nn, y_train.values, X_te_nn, y_test.values, class_weights=cw_tensor)
-    mlp_int, mlp_soft = mlp.predict(X_te_nn)
-    mlp_int  = np.clip(mlp_int, 0, max_val)
-    mlp_soft = np.clip(mlp_soft, 0, max_val)
-    mlp_mae, mlp_mse, mlp_qwk, mlp_acc, mlp_err_dist, mlp_entropy = _eval_preds(
-        y_test, mlp_int, mlp_soft, max_val, "OrdinalMLP")
+    if "ordinal_mlp" in run:
+        print(f"    training OrdinalMLP on {device_str}...")
+        mlp = _OrdinalMLP(
+            n_features=X_tr_nn.shape[1],
+            n_classes=n_classes,
+            device=device_str,
+            hidden=(512, 256),
+            dropout=(0.3, 0.2),
+            lr=1e-3,
+            weight_decay=1e-4,
+            epochs=150,
+            batch_size=256,
+            patience=20,
+        )
+        mlp.fit(X_tr_nn, y_train.values, X_te_nn, y_test.values, class_weights=cw_tensor)
+        mlp_int, mlp_soft = mlp.predict(X_te_nn)
+        mlp_int  = np.clip(mlp_int, 0, max_val)
+        mlp_soft = np.clip(mlp_soft, 0, max_val)
+        mlp_mae, mlp_mse, mlp_qwk, mlp_acc, mlp_err_dist, mlp_entropy = _eval_preds(
+            y_test, mlp_int, mlp_soft, max_val, "OrdinalMLP")
+    else:
+        mlp = mlp_int = mlp_soft = mlp_mae = mlp_mse = mlp_qwk = mlp_acc = mlp_err_dist = mlp_entropy = None
 
     # ── Option D: TabNet ───────────────────────────────────────────────────────
-    tabnet_result = _run_tabnet(X_tr_nn, y_train.values, X_te_nn, y_test,
-                                n_classes, max_val, cw_np)
+    if "tabnet" in run:
+        tabnet_result = _run_tabnet(X_tr_nn, y_train.values, X_te_nn, y_test,
+                                    n_classes, max_val, cw_np)
+    else:
+        tabnet_result = None
     if tabnet_result is not None:
         clf_tn, tn_int, tn_ev = tabnet_result
         tn_int  = np.clip(tn_int, 0, max_val)
@@ -700,15 +726,17 @@ def train_one(df, target_col, model_dir, tune=False, tune_iter=25):
             y_test, tn_int, tn_ev, max_val, "TabNet")
 
     # ── Pick winner and save it ────────────────────────────────────────────────
-    candidates = [
-        ("regressor",        reg_qwk,    reg_mae,    reg_mse,    reg_acc,    reg_int,    spread_preds,             reg,    None,     reg_int),
-        ("clf_argmax",       clf_qwk_am, clf_mae_am, clf_mse_am, clf_acc_am, clf_argmax, clf_argmax.astype(float), clf,    "argmax", clf_argmax),
-        ("clf_expected_val", clf_qwk_ev, clf_mae_ev, clf_mse_ev, clf_acc_ev, clf_ev_int, clf_ev,                   clf,    "ev",     clf_ev_int),
-        ("ordinal_mlp",      mlp_qwk,    mlp_mae,    mlp_mse,    mlp_acc,    mlp_int,    mlp_soft,                 mlp,    "ev",     mlp_int),
-    ]
+    candidates = []
+    if "regressor" in run:
+        candidates.append(("regressor",        reg_qwk,    reg_mae,    reg_mse,    reg_acc,    reg_int,    spread_preds,             reg,    None,     reg_int))
+    if "clf_argmax" in run:
+        candidates.append(("clf_argmax",       clf_qwk_am, clf_mae_am, clf_mse_am, clf_acc_am, clf_argmax, clf_argmax.astype(float), clf,    "argmax", clf_argmax))
+    if "clf_expected_val" in run:
+        candidates.append(("clf_expected_val", clf_qwk_ev, clf_mae_ev, clf_mse_ev, clf_acc_ev, clf_ev_int, clf_ev,                   clf,    "ev",     clf_ev_int))
+    if "ordinal_mlp" in run:
+        candidates.append(("ordinal_mlp",      mlp_qwk,    mlp_mae,    mlp_mse,    mlp_acc,    mlp_int,    mlp_soft,                 mlp,    "ev",     mlp_int))
     if tabnet_result is not None:
-        candidates.append(
-        ("tabnet",           tn_qwk,     tn_mae,     tn_mse,     tn_acc,     tn_int,     tn_ev,                    clf_tn, "ev",     tn_int))
+        candidates.append(("tabnet",           tn_qwk,     tn_mae,     tn_mse,     tn_acc,     tn_int,     tn_ev,                    clf_tn, "ev",     tn_int))
     # Primary sort: MAE (lower = better); tiebreak: QWK (higher = better)
     winner_name, best_qwk, best_mae, best_mse, best_acc, best_int, best_soft, best_model, pred_mode, _ = \
         max(candidates, key=lambda c: (-c[2], c[1]))
@@ -742,10 +770,10 @@ def train_one(df, target_col, model_dir, tune=False, tune_iter=25):
         "exact_acc":    round(float(best_acc), 4),
         # Per-variant metrics for comparison
         "variants": {
-            "regressor":        {"qwk": round(reg_qwk, 4),    "mae": round(reg_mae, 4),    "mse": round(reg_mse, 4),    "exact": round(float(reg_acc), 4),    "pred_entropy": reg_entropy,    "error_dist": reg_err_dist},
-            "clf_argmax":       {"qwk": round(clf_qwk_am, 4), "mae": round(clf_mae_am, 4), "mse": round(clf_mse_am, 4), "exact": round(float(clf_acc_am), 4), "pred_entropy": clf_entropy_am, "error_dist": clf_err_dist_am},
-            "clf_expected_val": {"qwk": round(clf_qwk_ev, 4), "mae": round(clf_mae_ev, 4), "mse": round(clf_mse_ev, 4), "exact": round(float(clf_acc_ev), 4), "pred_entropy": clf_entropy_ev, "error_dist": clf_err_dist_ev},
-            "ordinal_mlp":      {"qwk": round(mlp_qwk, 4),    "mae": round(mlp_mae, 4),    "mse": round(mlp_mse, 4),    "exact": round(float(mlp_acc), 4),    "pred_entropy": mlp_entropy,    "error_dist": mlp_err_dist},
+            **( {"regressor":        {"qwk": round(reg_qwk, 4),    "mae": round(reg_mae, 4),    "mse": round(reg_mse, 4),    "exact": round(float(reg_acc), 4),    "pred_entropy": reg_entropy,    "error_dist": reg_err_dist}}        if "regressor"        in run else {} ),
+            **( {"clf_argmax":       {"qwk": round(clf_qwk_am, 4), "mae": round(clf_mae_am, 4), "mse": round(clf_mse_am, 4), "exact": round(float(clf_acc_am), 4), "pred_entropy": clf_entropy_am, "error_dist": clf_err_dist_am}}       if "clf_argmax"       in run else {} ),
+            **( {"clf_expected_val": {"qwk": round(clf_qwk_ev, 4), "mae": round(clf_mae_ev, 4), "mse": round(clf_mse_ev, 4), "exact": round(float(clf_acc_ev), 4), "pred_entropy": clf_entropy_ev, "error_dist": clf_err_dist_ev}}       if "clf_expected_val" in run else {} ),
+            **( {"ordinal_mlp":      {"qwk": round(mlp_qwk, 4),    "mae": round(mlp_mae, 4),    "mse": round(mlp_mse, 4),    "exact": round(float(mlp_acc), 4),    "pred_entropy": mlp_entropy,    "error_dist": mlp_err_dist}}           if "ordinal_mlp"      in run else {} ),
             **( {"tabnet": {"qwk": round(tn_qwk, 4), "mae": round(tn_mae, 4), "mse": round(tn_mse, 4), "exact": round(float(tn_acc), 4), "pred_entropy": tn_entropy, "error_dist": tn_err_dist}} if tabnet_result is not None else {} ),
         },
         "label_dist":   y.value_counts().sort_index().to_dict(),
@@ -759,176 +787,48 @@ def train_one(df, target_col, model_dir, tune=False, tune_iter=25):
 
 # ── Auto-generated predictor ───────────────────────────────────────────────────
 
-PREDICTOR_TEMPLATE = '''#!/usr/bin/env python3
-"""
-predict.py  (auto-generated by train.py)
-"""
-import json, os, argparse
-import numpy as np
-import lightgbm as lgb
-
-MODEL_DIR      = os.path.join(os.path.dirname(__file__), "models")
-TARGETS        = {targets}
-FEATURES       = {features}
-IMDB_CATS      = {imdb_cats}
-SEVERITY_ORDER = ["none", "mild", "moderate", "severe"]
-GENRE_BITS     = {genre_bits}
-MPA_ORDINAL    = {mpa_ordinal}
-
-def _imdb_feats(raw_guide):
-    feats = {{}}
-    guide_map = {{}}
-    for e in (raw_guide or []):
-        if isinstance(e, dict) and "category" in e:
-            guide_map[e["category"]] = e
-            
-    import math
-    for cat in IMDB_CATS:
-        cat_l = cat.lower()
-        entry = guide_map.get(cat, {{}})
-        bk = {{}}
-        if isinstance(entry, dict):
-            for b in entry.get("severityBreakdowns", []):
-                if isinstance(b, dict) and "severityLevel" in b:
-                    bk[str(b["severityLevel"]).lower()] = b.get("voteCount") or 0
-                    
-        total = weighted = 0
-        for i, lv in enumerate(SEVERITY_ORDER):
-            try: v = int(bk.get(lv, 0))
-            except: v = 0
-            feats[f"imdb_{{cat_l}}_{{lv}}"] = v
-            total += v; weighted += v * i
-            
-        feats[f"imdb_{{cat_l}}_total"] = total
-        mu = (weighted / total) if total > 0 else 0.0
-        feats[f"imdb_{{cat_l}}_weighted"] = mu
-        
-        p_severe   = (bk.get("severe", 0) / total) if total > 0 else 0.0
-        p_moderate = (bk.get("moderate", 0) / total) if total > 0 else 0.0
-        p_mild     = (bk.get("mild", 0) / total) if total > 0 else 0.0
-        p_none     = (bk.get("none", 0) / total) if total > 0 else 0.0
-        
-        feats[f"imdb_{{cat_l}}_severe_ratio"]   = p_severe
-        feats[f"imdb_{{cat_l}}_moderate_ratio"] = p_moderate
-        feats[f"imdb_{{cat_l}}_mild_ratio"]     = p_mild
-        feats[f"imdb_{{cat_l}}_none_ratio"]     = p_none
-        feats[f"imdb_{{cat_l}}_mature_ratio"]   = p_severe + p_moderate
-        
-        entropy = variance = 0.0
-        for i, p in enumerate([p_none, p_mild, p_moderate, p_severe]):
-            if p > 0:
-                entropy -= p * math.log2(p)
-                variance += p * ((i - mu) ** 2)
-        feats[f"imdb_{{cat_l}}_entropy"] = entropy
-        feats[f"imdb_{{cat_l}}_variance"] = variance
-        feats[f"imdb_{{cat_l}}_std_dev"]  = variance ** 0.5
-        
-        v_severe   = bk.get("severe", 0)
-        v_moderate = bk.get("moderate", 0)
-        v_mild     = bk.get("mild", 0)
-        feats[f"imdb_{{cat_l}}_severe_acceleration"] = (v_severe / (v_moderate + 1))
-        feats[f"imdb_{{cat_l}}_moderate_acceleration"] = (v_moderate / (v_mild + 1))
-        feats[f"imdb_{{cat_l}}_sample_gravity"] = mu * math.log1p(total)
-
-    v_total = feats.get("imdb_violence_total", 0)
-    p_total = feats.get("imdb_profanity_total", 0)
-    s_total = feats.get("imdb_sexual_content_total", 0)
-    feats["imdb_contrast_violence_vs_profanity"] = (v_total / p_total) if p_total > 0 else 0.0
-    feats["imdb_contrast_sex_vs_violence"] = (s_total / v_total) if v_total > 0 else 0.0
-    return feats
-
-def build_row(imdb_id, c, meta=None):
-    meta = meta or {{}}
-    row = {{}}
-    row["year"]       = meta.get("year")       or c.get("year")
-    row["rating"]     = meta.get("rating")     or c.get("imdbRating")
-    row["votes"]      = meta.get("votes")      or c.get("votes")
-    row["is_season"]  = int(bool(meta.get("isSeason", False)))
-    row["popularity"] = c.get("popularity") or 0
-    genres = meta.get("genres") or c.get("genres") or 0
-    
-    try: genres = int(genres)
-    except: genres = 0
-    for n, b in GENRE_BITS.items():
-        row[f"genre_{{n.lower().replace(\'-\',\'_\')}}"] = int(bool(genres & (1 << b)))
-        
-    year = row["year"]
-    try: row["decade"] = (int(year) // 10) * 10 if year else 1990
-    except: row["decade"] = 1990
-    
-    mpa = c.get("mpaCertification")
-    row["mpa_ordinal"] = MPA_ORDINAL.get(mpa) if mpa else None
-    for label in ["G", "PG", "PG-13", "R", "NC-17"]:
-        row[f"mpa_{{label.replace(\'-\',\'_\')}}"] = int(mpa == label) if mpa else 0
-    row["has_mpa"] = int(mpa is not None)
-    row.update(_imdb_feats(c.get("rawParentsGuide")))
-    row["has_imdb_guide"] = int(bool(c.get("rawParentsGuide")))
-    
-    mat = c.get("matMask")
-    try: 
-        if mat is not None: mat = int(mat)
-    except: mat = None
-    for name, shift in [("nudity",0),("violence",2),("profanity",4),("substances",6),("frightening",8)]:
-        row[f"matmask_{{name}}"] = ((mat >> shift) & 0b11) if mat is not None else None
-    row["has_matmask"] = int(mat is not None)
-    
-    for feat in FEATURES.get(TARGETS[0], []):
-        if feat.startswith("tfidf_") and feat not in row:
-            row[feat] = 0.0
-    return row
-
-_models = {{}}
-def _model(t):
-    if t not in _models:
-        _models[t] = lgb.Booster(model_file=os.path.join(MODEL_DIR, f"model_{{t}}.lgb"))
-    return _models[t]
-
-def predict_movie(imdb_id, cache_entry, meta=None):
-    row = build_row(imdb_id, cache_entry, meta)
-    out = {{}}
-    
-    dataset_mean = 2.2
-    spread_multiplier = 1.3
-    
-    for t in TARGETS:
-        X = np.array([[row.get(f, np.nan) if row.get(f) is not None else np.nan
-                       for f in FEATURES[t]]])
-        raw = _model(t).predict(X)[0]
-        
-        # FIXED: Applies consistent post-processing variance expansion to live models
-        raw_clipped = np.clip(raw, 0, 5)
-        spread_raw = dataset_mean + (raw_clipped - dataset_mean) * spread_multiplier
-        
-        out[t] = int(np.clip(round(spread_raw), 0, 5))
-    return out
-
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--cache",        required=True)
-    ap.add_argument("--out",          default="./predictions.json")
-    ap.add_argument("--only-missing", action="store_true")
-    args = ap.parse_args()
-    with open(args.cache) as f: cache = json.load(f)
-    results = {{}}
-    for i, (imdb_id, entry) in enumerate(cache.items()):
-        if args.only_missing and entry.get("csm"): continue
-        try:    results[imdb_id] = predict_movie(imdb_id, entry)
-        except Exception as e: results[imdb_id] = {{"error": str(e)}}
-    with open(args.out, "w") as f: json.dump(results, f)
-    print(f"Done predictions.")
-'''
-
 def write_predictor(meta_list, model_dir):
+    """
+    Stamps updated data-derived constants (TARGETS, FEATURES, MODEL_DIR) into
+    the canonical predict.py that lives next to train.py, then writes the result
+    to <model_dir>/predict.py.
+
+    Only the header assignment lines are replaced — all logic stays untouched.
+    """
     valid = [m for m in meta_list if m]
-    code = PREDICTOR_TEMPLATE.format(
-        targets=json.dumps([m["target"] for m in valid]),
-        features=json.dumps({m["target"]: m["feature_cols"] for m in valid}),
-        imdb_cats=json.dumps(IMDB_CATEGORIES),
-        genre_bits=json.dumps(GENRE_BITS),
-        mpa_ordinal=json.dumps(MPA_ORDINAL),
-    )
-    path = os.path.join(model_dir, "predict.py")
-    with open(path, "w") as f: f.write(code)
+
+    # Locate the canonical predict.py next to train.py
+    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predict.py")
+    if not os.path.exists(src_path):
+        print(f"  ⚠  write_predictor: cannot find {src_path} — skipping predict.py generation.")
+        return
+
+    with open(src_path, "r") as f:
+        lines = f.readlines()
+
+    # Build replacement values
+    new_targets  = json.dumps([m["target"] for m in valid])
+    new_features = json.dumps({m["target"]: m["feature_cols"] for m in valid})
+    # MODEL_DIR in predict.py should point to model_dir, relative to predict.py's own location
+    rel_model_dir = os.path.relpath(model_dir, os.path.dirname(src_path))
+    new_model_dir = f'os.path.join(os.path.dirname(__file__), {json.dumps(rel_model_dir)})'
+
+    import re
+    patched = []
+    for line in lines:
+        if re.match(r'^TARGETS\s*=', line):
+            line = f"TARGETS        = {new_targets}\n"
+        elif re.match(r'^FEATURES\s*=', line):
+            line = f"FEATURES       = {new_features}\n"
+        elif re.match(r'^MODEL_DIR\s*=', line):
+            line = f"MODEL_DIR      = {new_model_dir}\n"
+        patched.append(line)
+
+    os.makedirs(model_dir, exist_ok=True)
+    out_path = os.path.join(model_dir, "predict.py")
+    with open(out_path, "w") as f:
+        f.writelines(patched)
+    print(f"\n  ✓  predict.py written → {out_path}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -972,7 +872,7 @@ def main():
     with open(os.path.join(args.model_dir, "meta.json"), "w") as f:
         json.dump([r for r in results if r], f, indent=2)
 
-    #write_predictor(results, args.model_dir)
+    write_predictor(results, args.model_dir)
 
     print("\n── Summary ───────────────────────────────────────────────────────────")
     print(f"  {'target':12s}  {'winner':20s}  MAE    QWK    Exact")

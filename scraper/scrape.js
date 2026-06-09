@@ -792,7 +792,7 @@ async function buildOutput(movies, cache, modelDir) {
   for (let idx = 0; idx < movies.length; idx++) {
     const m = movies[idx];
     const c = cache[m.id] || {};
-    const availability = 1+countProviders(c.providerMask)/2
+    const availability = 0.1+countProviders(c.providerMask)
     const entry = {
       id: m.id,
       t: m.title,

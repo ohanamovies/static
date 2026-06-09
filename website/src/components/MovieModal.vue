@@ -110,13 +110,13 @@
                   <div
                     class="mat-score-bar"
                     :class="scoreCssClass(getScore(movie.mat, cat.shift))"
-                    :style="{ width: `${getScore(movie.mat, cat.shift) / 5 * 90+10}%` }"
+                    :style="{ width: `${getScore(movie.mat, cat.shift) / 5 * 95+5}%` }"
                   ></div>
                 </div>
                 <span class="mat-score-label" :class="scoreCssClass(getScore(movie.mat, cat.shift))">
                   {{ SEVERITY_LABELS[Math.round(getScore(movie.mat, cat.shift))] }}
                 </span>
-                <span class="mat-score-val">{{ getScore(movie.mat, cat.shift).toFixed(1) }}</span>
+                <span class="mat-score-val">{{ getScore(movie.mat, cat.shift).toFixed(0) }}</span>
               </div>
             </div>
 
@@ -496,17 +496,17 @@ watch(() => props.movie, (movie) => {
 
 .mat-score-label {
   font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  min-width: 56px;
-  text-align: right;
+  color: white;
+  text-shadow: 1px black;
+  min-width: 70px;
+  text-align: center;
   flex-shrink: 0;
 }
 
 .mat-score-val {
   font-size: 11px;
   color: var(--muted);
-  min-width: 28px;
+  min-width: 8px;
   text-align: right;
   flex-shrink: 0;
 }
