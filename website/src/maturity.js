@@ -23,19 +23,19 @@ export function scoreCssClass(score) {
 }
 
 /** Extract the 0–5 float score for a category from a 16-bit matMask. */
-export function getScore(matMask, shift) {
+export function getScore(matMask, shift, precise) {
   return decodeNibble((matMask >>> shift) & 0xf);
 }
 
 /** Encode a 0–5 float into a 4-bit nibble layout (0.5-step precision) */
 export function encodeNibble(value) {
   const v = typeof value === "number" && isFinite(value) ? value : 0;
-  return Math.min(10, Math.max(0, Math.round(Math.min(5, Math.max(0, v)) * 2)));
+  return Math.min(15, Math.max(0, Math.round(Math.min(5, Math.max(0, v)) * 3)));
 }
 
 /** Decode a 4-bit nibble layout into an application float score */
 export function decodeNibble(nibble) {
-  return Math.min(10, Math.max(0, nibble & 0xf)) / 2;
+  return Math.min(15, Math.max(0, nibble & 0xf)) / 3;
 }
 
 /** Pack custom category arrays back down into a 16-bit integer mask */

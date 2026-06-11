@@ -32,6 +32,7 @@ import zlib from "zlib";
 import readline from "readline";
 import { pipeline } from "stream/promises";
 import { MATURITY_CATEGORIES as MAT_CATS } from "./../website/src/maturity.js";
+import { extractMovieTags } from "./tags.js";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const TMDB_KEY = process.env.TMDB_API_KEY;
@@ -286,7 +287,7 @@ async function buildTopN() {
   const allTitlesMap = new Map(); // imdbId → movie object, unfiltered
   await parseTsv("./title.basics.tsv", (row) => {
     // Include movies and TV seasons only
-    if (row.titleType !== "movie" && row.titleType !== "tvSeason") return;
+    if (row.titleType !== "movie" && row.titleType !== "tvSeries") return;
     if (!ratings.has(row.tconst)) return;
     if (row.isAdult === "1") return;
 
@@ -299,7 +300,7 @@ async function buildTopN() {
       if (GENRE_MAP[g] !== undefined) genreMask |= GENRE_MAP[g];
     }
 
-    const r = ratings.get(row.tconst);
+    const r = ratings.get(row.tconst)
     const entry = {
       id: row.tconst,
       title: row.primaryTitle,
@@ -307,11 +308,11 @@ async function buildTopN() {
       rating: r.rating,
       votes: r.votes,
       genres: genreMask,
-      isSeason: row.titleType === "tvSeason",
+      isSeason: row.titleType === "tvSeries",
     };
     allTitlesMap.set(row.tconst, entry);
     // Apply quality filter for the main ranked list
-    if (r.votes >= 500 && r.rating >= 5) titles.push(entry);
+    if (r.votes >= 750 && r.rating >= 5) titles.push(entry);
   });
 
   log(`Found ${titles.length} titles passing quality filter (movies + TV seasons). Sorting by votes × rating...`);
@@ -403,7 +404,7 @@ async function enrichWithTmdb(movies, cache) {
               } catch (_) {}
               // Fetch Spanish translation for overview + title
               try {
-                const transUrl = `https://api.themoviedb.org/3/tv/season/${tvSeason.id}/translations?api_key=${TMDB_KEY}`;
+                const transUrl = `https://api.themoviedb.org/3/tv/${showId}/season/${tvSeason.season_number}/translations?api_key=${TMDB_KEY}`;
                 const transData = await tmdbLimiter.run(() => fetchJson(transUrl));
                 const esEntry = transData.translations?.find((t) => t.iso_3166_1 === "ES" && t.iso_639_1 === "es");
                 overviewEs = esEntry?.data?.overview || null;
@@ -855,6 +856,7 @@ async function buildOutput(movies, cache, modelDir) {
     extraLookup[m.id] = {
       synopsisEn: c.overviewEn ?? undefined,
       csm: c.csm?.csmUrl ?? undefined,
+      tags: extractMovieTags(c),
       tmdbUrl: c.tmdbId 
       ? `https://www.themoviedb.org/${m.isSeason ? 'tv' : 'movie'}/${c.tmdbId}`
       : undefined

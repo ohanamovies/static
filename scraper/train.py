@@ -218,23 +218,26 @@ def build_records(cache, movies_meta=None, min_guide_votes=0):
 
         # TEXT STRATAGEM
         txt_pieces = []
-        for key in ["title"]:
-            if c.get(key):
-                txt_pieces.append(str(c[key]))
+        # for key in ["title"]:
+        #     if c.get(key):
+        #         txt_pieces.append(str(c[key]))
+        # if isinstance(raw_guide, list):
+        #     for entry in raw_guide:                        # entry = {category, reviews, ...}
+        #         if isinstance(entry.get("reviews"), list):
+        #             for rev in entry["reviews"]:           # rev = {"text": "..."}
+        #                 if isinstance(rev, dict) and rev.get("text"):
+        #                     txt_pieces.append(str(rev["text"]))
 
-        if isinstance(raw_guide, list):
-            for entry in raw_guide:                        # entry = {category, reviews, ...}
-                if isinstance(entry.get("reviews"), list):
-                    for rev in entry["reviews"]:           # rev = {"text": "..."}
-                        if isinstance(rev, dict) and rev.get("text"):
-                            txt_pieces.append(str(rev["text"]))
-
-        if isinstance(csm, dict):
-            for key in ["parentsNeedToKnow", "oneLiner"]:
-                if csm.get(key):
-                    txt_pieces.append(str(csm[key]))
+        if meta.get("tags"):
+            # Flattens all lists inside the tags dictionary into txt_pieces
+            txt_pieces.extend([word for keywords in meta["tags"].values() for word in keywords])
+        # if isinstance(csm, dict):
+        #     for key in ["parentsNeedToKnow", "oneLiner"]:
+        #         if csm.get(key):
+        #             txt_pieces.append(str(csm[key]))
 
         synopses.append(" ".join(txt_pieces).strip())
+        #print(f"{synopses[-1]} - {meta}")
 
     return records, synopses
 
@@ -554,7 +557,7 @@ def _run_tabnet(X_train_np, y_train_np, X_test_np, y_test,
     return clf_tn, tn_int, tn_ev
 
 
-VALID_MODELS = {"regressor", "clf_argmax"}#, "clf_expected_val", "ordinal_mlp", "tabnet"}
+VALID_MODELS = {"clf_argmax"}# "regressor","clf_expected_val", "ordinal_mlp", "tabnet"}
 
 def train_one(df, target_col, model_dir, tune=False, tune_iter=25, models=None):
     valid = df[df[target_col].notna()].copy()
@@ -795,7 +798,8 @@ def write_predictor(meta_list, model_dir):
     valid = [m for m in meta_list if m]
 
     # Locate the canonical predict.py next to train.py
-    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predict_template.py")
+    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predict.py")
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predict.py")
     if not os.path.exists(src_path):
         print(f"  ⚠  write_predictor: cannot find {src_path} — skipping predict.py generation.")
         return
@@ -822,7 +826,6 @@ def write_predictor(meta_list, model_dir):
         patched.append(line)
 
     os.makedirs(model_dir, exist_ok=True)
-    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "predict.py")
     with open(out_path, "w") as f:
         f.writelines(patched)
     print(f"\n  ✓  predict.py written → {out_path}")
@@ -833,19 +836,19 @@ def write_predictor(meta_list, model_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache",           required=True)
-    ap.add_argument("--movies",          default=None)
+    ap.add_argument("--extra",           default="../website/public/extra.json")
     ap.add_argument("--model-dir",       default=MODEL_DIR)
     ap.add_argument("--targets",         nargs="+", default=CSM_TARGETS)
     ap.add_argument("--min-guide-votes", type=int, default=10) # Retain lower-vote films
     ap.add_argument("--tune",            action="store_true",  help="Run random-search HP tuning before training (slower)")
-    ap.add_argument("--tune-iter",        type=int, default=25, help="Number of random-search iterations (default 25)")
+    ap.add_argument("--tune-iter",       type=int, default=25, help="Number of random-search iterations (default 25)")
     args = ap.parse_args()
 
     with open(args.cache) as f: cache = json.load(f)
 
     movies_meta = None
-    if args.movies:
-        with open(args.movies) as f: raw = json.load(f)
+    if args.extra:
+        with open(args.extra) as f: raw = json.load(f)
         movies_meta = {m["id"]: m for m in raw} if isinstance(raw, list) else raw
 
     df, tfidf = build_dataset(cache, movies_meta, min_guide_votes=args.min_guide_votes)

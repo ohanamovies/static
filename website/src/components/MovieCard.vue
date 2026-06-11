@@ -24,7 +24,7 @@
           v-for="cat in MATURITY_CATEGORIES"
           :key="cat.key"
           class="mat-dot"
-          :class="scoreCssClass(getScore(movie.mat, cat.shift))"
+          :class="scoreCssClass(Math.round(getScore(movie.mat, cat.shift)))"
           :title="`${cat.label}: ${SEVERITY_LABELS[Math.round(getScore(movie.mat, cat.shift))]}`"
         ></span>
       </div>
@@ -56,7 +56,7 @@ const genreLabels = computed(() => {
 
 // Sex & Nudity is shift 0; blur if score >= 4 (Strong or Severe)
 const nudityBlurred = computed(() =>
-  props.movie.mat !== undefined && getScore(props.movie.mat, 0) >= 5
+  props.movie.mat !== undefined && getScore(props.movie.mat, 0) > 4
 );
 
 const posterStyle = computed(() => ({

@@ -109,17 +109,25 @@
                 <div class="mat-score-bar-wrap">
                   <div
                     class="mat-score-bar"
-                    :class="scoreCssClass(getScore(movie.mat, cat.shift))"
+                    :class="scoreCssClass(Math.round(getScore(movie.mat, cat.shift)))"
                     :style="{ width: `${getScore(movie.mat, cat.shift) / 5 * 95+5}%` }"
                   ></div>
                 </div>
-                <span class="mat-score-label" :class="scoreCssClass(getScore(movie.mat, cat.shift))">
+                <span class="mat-score-label" :class="scoreCssClass(Math.round(getScore(movie.mat, cat.shift)))">
                   {{ SEVERITY_LABELS[Math.round(getScore(movie.mat, cat.shift))] }}
-                  - {{ getScore(movie.mat, cat.shift).toFixed(0) }}/5
+                  - {{ formatScore(getScore(movie.mat, cat.shift)) }}/5
                 </span>
                 
               </div>
             </div>
+
+            <div class="modal-genres">
+              <span v-for="g in extraDetails.tags?.SEXUAL_CONTENT" :key="g" class="genre-chip">{{ g.replaceAll('_', ' ') }}</span>    
+              <span v-for="g in extraDetails.tags?.VIOLENCE" :key="g" class="genre-chip">{{ g.replaceAll('_', ' ') }}</span> 
+              <span v-for="g in extraDetails.tags?.PROFANITY" :key="g" class="genre-chip">{{ g.replaceAll('_', ' ') }}</span> 
+              <span v-for="g in extraDetails.tags?.ALCOHOL_DRUGS" :key="g" class="genre-chip">{{ g.replaceAll('_', ' ') }}</span> 
+            
+          </div>
 
             <!-- Community review excerpts from IMDb (collapsed per category) -->
             <div v-if="matReviewsLoading" class="mat-loading">Loading community reviews…</div>
@@ -230,6 +238,15 @@ const matReviewCategories = computed(() => {
   }).filter(cat => cat.items.length > 0);
 });
 
+function formatScore(raw) {
+  if (raw === null || raw === undefined) return '?';
+  const base = Math.floor(raw);
+  const frac = raw - base;
+  if (frac < 0.2) return `${base}`;
+  if (frac > 0.8) return `${base + 1}-`;
+  return `${base}+`;
+}
+
 async function loadReviews(imdbId) {
   matReviews.value = null;
   matReviewsError.value = null;
@@ -311,7 +328,7 @@ watch(() => props.movie, (movie) => {
 }
 
 .modal-close {
-  position: fixed;
+  position: sticky;
   top: 24px;
   left: 24px;
   background: transparent;
@@ -500,7 +517,7 @@ watch(() => props.movie, (movie) => {
   font-size: 10px;
   color: white;
   text-shadow: 1px black;
-  min-width: 75px;
+  min-width: 90px;
   text-align: center;
   flex-shrink: 0;
 }
