@@ -7,3 +7,4 @@ website/public/extra.json
 .env
 .env.*
 *.local
+.netlify/
