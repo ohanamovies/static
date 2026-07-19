@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed, shallowRef } from "vue";
 import Fuse from "fuse.js";
 import { MATURITY_CATEGORIES, getScore } from "@/maturity.js";
+import { DEFAULT_MATURITY_PROFILES, normalizeMaturityProfiles, normalizeMaturityValues, profileById, profileLabel } from "@/lib/maturityProfiles.js";
 
 // ── Genres: exact IMDb strings as keys, bitmask values ───────────────────────
 export const GENRES = {
@@ -57,11 +58,17 @@ export const useMovieStore = defineStore("movies", () => {
   // Filters
   const searchQuery = ref("");
   const selectedGenres = ref(new Set());
-  const selectedProviders = ref(0);       // bitmask of selected providers
+  const selectedProviders = ref(0);       // bitmask of configured services from Settings
+  const availabilityMode = ref("my-services"); // my-services | any; temporary Discover choice
+  const titleType = ref("both");          // both | movies | tv; browsing only, search stays broad
   const minRating = ref(0);
+  // Session-only baseline safety: visible and easy to toggle off, but resets on reload/new session.
+  const safeBrowsingEnabled = ref(true);
   // Per-category max score: index matches MATURITY_CATEGORIES order (sex, violence, language, drugs)
   // -1 = no filter active; 0–5 = max allowed rounded score
   const maxMaturityCat = ref([-1, -1, -1, -1]);
+  const activeMaturityProfileId = ref("adults");
+  const maturityProfiles = ref(normalizeMaturityProfiles());
 
   // Sex & Nudity is shift 0; scale 0–5 → invert so lower score = higher sort weight
   const maturityScore = (a) => {
@@ -82,17 +89,33 @@ export const useMovieStore = defineStore("movies", () => {
 
   let fuse = null;
 
+  const MOVIES_JSON_URLS = ["movies.json", "https://ohana.tv/movies.json"];
+
+  async function fetchMoviesJson() {
+    const errors = [];
+
+    for (const url of MOVIES_JSON_URLS) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (e) {
+        errors.push(`${url}: ${e.message}`);
+      }
+    }
+
+    throw new Error(errors.join("; "));
+  }
+
   // ── Load data ─────────────────────────────────────────────
   async function loadMovies() {
     loading.value = true;
     error.value = null;
     try {
-      const res = await fetch("movies.json");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchMoviesJson();
       allMovies.value = data.movies || generateMockMovies();
     } catch (e) {
-      console.warn("Could not load movies.json, using mock data:", e.message);
+      console.warn("Could not load movies.json from local or ohana.tv, using mock data:", e.message);
       allMovies.value = generateMockMovies();
     } finally {
       loading.value = false;
@@ -131,8 +154,16 @@ export const useMovieStore = defineStore("movies", () => {
 
     // No search query: hide movies without a poster
     pool = pool.filter(({ item }) => item.p);
-    // Hide movies with very explicit sex/nudity (maturity score >= 4.5)
-    pool = pool.filter(({ item }) => (getScore(item.mat, 0) || 0) < 4.5);
+    // Baseline safety hides very explicit sex/nudity unless the session-only Safe chip is off.
+    if (safeBrowsingEnabled.value) {
+      pool = pool.filter(({ item }) => (getScore(item.mat, 0) || 0) < 4.5);
+    }
+
+    if (titleType.value === "movies") {
+      pool = pool.filter(({ item }) => item.s !== 1);
+    } else if (titleType.value === "tv") {
+      pool = pool.filter(({ item }) => item.s === 1);
+    }
 
     if (selectedGenres.value.size > 0) {
       let mask = 0;
@@ -140,7 +171,7 @@ export const useMovieStore = defineStore("movies", () => {
       pool = pool.filter(({ item }) => item.g & mask);
     }
 
-    if (selectedProviders.value !== 0) {
+    if (availabilityMode.value === "my-services" && selectedProviders.value !== 0) {
       const pMask = selectedProviders.value;
       pool = pool.filter(({ item }) => item.prov & pMask);
     }
@@ -156,7 +187,8 @@ export const useMovieStore = defineStore("movies", () => {
         for (let i = 0; i < MATURITY_CATEGORIES.length; i++) {
           const threshold = catThresholds[i];
           if (threshold < 0) continue;
-          if (Math.round(getScore(item.mat, MATURITY_CATEGORIES[i].shift) || 6) >= threshold) return false;
+          const score = getScore(item.mat, MATURITY_CATEGORIES[i].shift);
+          if ((Number.isFinite(score) ? Math.round(score) : 6) > threshold) return false;
         }
         return true;
       });
@@ -174,13 +206,35 @@ export const useMovieStore = defineStore("movies", () => {
 
     const ROW_MAX = 500;
 
+    const activeProfileLabel = profileLabel(maturityProfiles.value, activeMaturityProfileId.value);
+
     const topRated = [...pool].sort( byRated ).slice(0, ROW_MAX);
     if (topRated.length >= 4)
-      rows.push({ id: "top-rated", label: "Top Rated", movies: topRated });
+      rows.push({ id: "recommended", label: `Recommended for ${activeProfileLabel}`, movies: topRated });
+
+    const hiddenGems = [...pool]
+      .filter((m) => (m.r || 0) >= 7 && (m.pop || 0) < 30)
+      .sort(byRated)
+      .slice(0, ROW_MAX);
 
     const trending = [...pool].sort( byTrending ).slice(0, ROW_MAX);
     if (trending.length >= 4)
-      rows.push({ id: "trending", label: "Popular", movies: trending });
+      rows.push({ id: "popular", label: "Popular now", movies: trending });
+
+    const providerRows = PROVIDERS
+      .filter((prov) => !selectedProviders.value || (selectedProviders.value & prov.bit))
+      .map((prov) => {
+        const provMovies = pool
+          .filter((m) => m.prov & prov.bit)
+          .sort(byPopRating)
+          .slice(0, ROW_MAX);
+        return { prov, provMovies };
+      })
+      .filter(({ provMovies }) => provMovies.length >= 4)
+      .map(({ prov, provMovies }) => ({ id: `prov-${prov.id}`, label: `Available on ${prov.name}`, movies: provMovies }));
+
+    if (selectedProviders.value) rows.push({ id: "included-services", label: "Available on your services", movies: [...pool].filter((m) => m.prov & selectedProviders.value).sort(byPopRating).slice(0, ROW_MAX) }, ...providerRows);
+    if (hiddenGems.length >= 4) rows.push({ id: "hidden-gems", label: "Hidden gems", movies: hiddenGems });
 
     for (const [genre, mask] of Object.entries(GENRES)) {
       const genreMovies = pool
@@ -191,17 +245,32 @@ export const useMovieStore = defineStore("movies", () => {
         rows.push({ id: `genre-${genre}`, label: genre, movies: genreMovies });
     }
 
-    for (const prov of PROVIDERS) {
-      const provMovies = pool
-        .filter((m) => m.prov & prov.bit)
-        .sort(byPopRating)
-        .slice(0, ROW_MAX);
-      if (provMovies.length >= 4)
-        rows.push({ id: `prov-${prov.id}`, label: `On ${prov.name}`, movies: provMovies });
-    }
+    if (!selectedProviders.value) rows.push(...providerRows);
 
-    return rows;
+    return diversifyRowStarts(rows);
   });
+
+  function movieKey(movie) {
+    return movie?.id || `${movie?.t || ""}-${movie?.y || ""}`.toLowerCase();
+  }
+
+  function diversifyRowStarts(rows) {
+    const seenPreviousRows = new Set();
+
+    return rows.map((row) => {
+      const fresh = [];
+      const repeated = [];
+
+      for (const movie of row.movies) {
+        (seenPreviousRows.has(movieKey(movie)) ? repeated : fresh).push(movie);
+      }
+
+      const movies = [...fresh, ...repeated];
+      for (const movie of row.movies) seenPreviousRows.add(movieKey(movie));
+
+      return { ...row, movies };
+    });
+  }
 
   // ── Filter helpers ────────────────────────────────────────
   function toggleGenre(g) {
@@ -215,18 +284,66 @@ export const useMovieStore = defineStore("movies", () => {
   }
 
   function setMaxMaturityCat(catIndex, level) {
+    if (catIndex < 0 || catIndex >= MATURITY_CATEGORIES.length) return;
     const arr = [...maxMaturityCat.value];
-    // Toggle off if tapping the already-active level; otherwise set, clamped to 0–5
-    arr[catIndex] = arr[catIndex] === level ? -1 : Math.min(5, Math.max(0, level));
+    arr[catIndex] = normalizeMaturityValues(arr.map((value, i) => i === catIndex ? level : value))[catIndex];
     maxMaturityCat.value = arr;
+    activeMaturityProfileId.value = "me";
+    updateMaturityProfile("me", { values: arr });
+  }
+
+  function setMaxMaturityCats(values, profileId = "me") {
+    const next = normalizeMaturityValues(values);
+    maxMaturityCat.value = next;
+    activeMaturityProfileId.value = profileId;
+    if (profileId === "me") updateMaturityProfile("me", { values: next });
+  }
+
+  function setMaturityProfiles(profiles, legacyValues) {
+    maturityProfiles.value = normalizeMaturityProfiles(profiles, legacyValues);
+    const activeProfile = profileById(maturityProfiles.value, activeMaturityProfileId.value);
+    maxMaturityCat.value = normalizeMaturityValues(activeProfile.values);
+  }
+
+  function updateMaturityProfile(id, patch) {
+    maturityProfiles.value = normalizeMaturityProfiles(
+      maturityProfiles.value.map(profile => profile.id === id ? { ...profile, ...patch } : profile)
+    );
+  }
+
+  function addMaturityProfile(profile) {
+    if (!profile?.id || !profile?.label) return;
+    maturityProfiles.value = normalizeMaturityProfiles([...maturityProfiles.value, { ...profile, builtIn: false }]);
+    selectMaturityProfile(profile.id);
+  }
+
+  function removeMaturityProfile(id) {
+    const target = profileById(maturityProfiles.value, id);
+    if (!target || target.builtIn) return;
+    maturityProfiles.value = normalizeMaturityProfiles(maturityProfiles.value.filter(profile => profile.id !== id));
+    if (activeMaturityProfileId.value === id) selectMaturityProfile("me");
+  }
+
+  function selectMaturityProfile(id) {
+    const profile = profileById(maturityProfiles.value, id);
+    activeMaturityProfileId.value = profile.id;
+    maxMaturityCat.value = normalizeMaturityValues(profile.values);
+  }
+
+  function clearMaturityFilters() {
+    selectMaturityProfile("adults");
   }
 
   function clearFilters() {
     searchQuery.value = "";
     selectedGenres.value = new Set();
-    selectedProviders.value = 0;
+    // Provider selections are permanent account settings (“my services”), not
+    // a throwaway Discover filter. Keep them intact when clearing the session.
+    titleType.value = "both";
     minRating.value = 0;
-    maxMaturityCat.value = [-1, -1, -1, -1];
+    availabilityMode.value = "my-services";
+    safeBrowsingEnabled.value = true;
+    clearMaturityFilters();
   }
 
   const availableProviders = computed(() => {
@@ -238,9 +355,10 @@ export const useMovieStore = defineStore("movies", () => {
 
   return {
     allMovies, loading, error,
-    searchQuery, selectedGenres, selectedProviders, minRating, maxMaturityCat,
+    searchQuery, selectedGenres, selectedProviders, availabilityMode, titleType, minRating, safeBrowsingEnabled, maxMaturityCat,
+    activeMaturityProfileId, maturityProfiles,
     filteredMovies, movieRows, availableProviders,
-    loadMovies, toggleGenre, toggleProvider, setMaxMaturityCat, clearFilters,
+    loadMovies, toggleGenre, toggleProvider, setMaxMaturityCat, setMaxMaturityCats, setMaturityProfiles, updateMaturityProfile, addMaturityProfile, removeMaturityProfile, selectMaturityProfile, clearMaturityFilters, clearFilters,
   };
 });
 

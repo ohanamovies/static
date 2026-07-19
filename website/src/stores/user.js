@@ -130,6 +130,15 @@ export const useUserStore = defineStore("user", () => {
     }
   }
 
+  async function renameList(token, name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const list = lists.value.find(l => l.token === token);
+    if (!list || list.name === trimmed) return;
+    lists.value = lists.value.map(l => l.token === token ? { ...l, name: trimmed } : l);
+    await _saveList(token);
+  }
+
   async function toggleMovieInList(listToken, imdbId) {
     const list = lists.value.find(l => l.token === listToken);
     if (!list) return;
@@ -225,7 +234,7 @@ export const useUserStore = defineStore("user", () => {
   return {
     userToken, userData, lists, loading, saving, isLoggedIn, watchedSet,
     isWatched, isInList, init, createUser, importUser, setName,
-    createList, addListByToken, removeList, toggleMovieInList, toggleWatched,
+    createList, addListByToken, removeList, renameList, toggleMovieInList, toggleWatched,
     addCustomProvider, removeCustomProvider, saveFilterPrefs,
     getShareUrl, logout,
   };

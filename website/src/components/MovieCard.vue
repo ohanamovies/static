@@ -1,5 +1,5 @@
 <template>
-  <div class="card" @click="$emit('select', movie)" :title="movie.t">
+  <button type="button" class="card" @click="$emit('select', movie)" :title="movie.t">
     <div class="card-poster" :style="posterStyle">
       <img
         v-if="movie.p && !imgError"
@@ -18,8 +18,12 @@
         <div class="card-year">{{ movie.y }}</div>
       </div>
 
+      <div class="card-badges">
+        <UiBadge v-if="compatibilityLabel" variant="overlay" :tone="compatibilityTone">{{ compatibilityLabel }}</UiBadge>
+      </div>
+
       <!-- Maturity severity dots -->
-      <div class="card-maturity" v-if="movie.mat">
+      <div class="card-maturity" v-if="maturityFilterActive && movie.mat">
         <span
           v-for="cat in MATURITY_CATEGORIES"
           :key="cat.key"
@@ -30,21 +34,57 @@
       </div>
     </div>
     <div class="card-info">
-      <p class="card-title">{{ movie.t }}</p>
+      <div class="card-title-row">
+        <p class="card-title">{{ movie.t }}</p>
+        <div v-if="statusLabels.length" class="card-status" aria-label="Your activity">
+          <UiBadge v-for="label in statusLabels" :key="label" variant="soft" tone="gold">{{ label }}</UiBadge>
+        </div>
+      </div>
       <p class="card-genres">{{ genreLabels }}</p>
     </div>
-  </div>
+  </button>
 </template>
 
 <script setup>
 import { ref, computed } from "vue";
-import { GENRES } from "@/stores/movies.js";
+import { GENRES, useMovieStore } from "@/stores/movies.js";
+import { useUserStore } from "@/stores/user.js";
 import { MATURITY_CATEGORIES, SEVERITY_LABELS, getScore, scoreCssClass } from "@/maturity.js";
+import { profileLabel } from "@/lib/maturityProfiles.js";
+import UiBadge from "@/components/UiBadge.vue";
 
 const props = defineProps({ movie: { type: Object, required: true } });
 defineEmits(["select"]);
 
+const store = useMovieStore();
+const userStore = useUserStore();
 const imgError = ref(false);
+const maturityFilterActive = computed(() => store.maxMaturityCat.some(v => v >= 0));
+
+const activeLimits = computed(() => store.maxMaturityCat
+  .map((level, i) => ({ level, category: MATURITY_CATEGORIES[i] }))
+  .filter(({ level }) => level >= 0)
+);
+
+const activeProfileName = computed(() => profileLabel(store.maturityProfiles, store.activeMaturityProfileId));
+const compatibilityLabel = computed(() => {
+  if (props.movie.mat === undefined) return `Unknown fit`;
+  if (!activeLimits.value.length) return null;
+  const exceeded = activeLimits.value.some(({ level, category }) => {
+    const score = getScore(props.movie.mat, category.shift);
+    return (Number.isFinite(score) ? Math.round(score) : 6) > level;
+  });
+  return exceeded ? `Review for ${activeProfileName.value}` : null;
+});
+const compatibilityTone = computed(() => compatibilityLabel.value?.startsWith("Fits") ? "success" : "warning");
+const listCount = computed(() => userStore.isLoggedIn ? userStore.lists.filter(list => list.movies.includes(props.movie.id)).length : 0);
+const statusLabels = computed(() => {
+  if (!userStore.isLoggedIn) return [];
+  const labels = [];
+  if (userStore.isWatched(props.movie.id)) labels.push("Watched");
+  if (listCount.value) labels.push(`${listCount.value} list${listCount.value === 1 ? "" : "s"}`);
+  return labels;
+});
 
 const genreLabels = computed(() => {
   const labels = [];
@@ -68,15 +108,33 @@ const posterStyle = computed(() => ({
 .card {
   width: var(--card-w);
   flex-shrink: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: transform 0.2s ease;
   position: relative;
   z-index: 0;
 }
 
-.card:hover {
+.card:hover,
+.card:focus-visible {
   transform: scale(1.08);
   z-index: 10;
+}
+
+.card:active {
+  transform: scale(0.98);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius);
 }
 
 .card-poster {
@@ -142,14 +200,27 @@ const posterStyle = computed(() => ({
   color: var(--muted);
 }
 
+/* ── Vision metadata ── */
+.card-badges {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  z-index: 2;
+}
+
 /* ── Maturity dots ── */
 .card-maturity {
   position: absolute;
-  top: 6px;
+  bottom: 6px;
   left: 6px;
   display: flex;
   gap: 3px;
   opacity: 1;
+  z-index: 2;
 }
 
 .mat-dot {
@@ -170,10 +241,21 @@ const posterStyle = computed(() => ({
 
 /* ── Info ── */
 .card-info {
+  display: grid;
+  gap: 3px;
   padding: 6px 2px 0;
 }
 
+.card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .card-title {
+  min-width: 0;
+  flex: 1;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
@@ -182,9 +264,37 @@ const posterStyle = computed(() => ({
   color: var(--white);
 }
 
+.card-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 52%;
+  overflow: hidden;
+}
+
+.card-status :deep(.ui-badge) {
+  padding: 3px 6px;
+  font-size: 9px;
+}
+
 .card-genres {
   font-size: 11px;
   color: var(--muted);
-  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .card:hover {
+    transform: none;
+    z-index: 0;
+  }
+
+  .card:hover .card-overlay { opacity: 0.8; }
+
+  .card-maturity {
+    display: none;
+  }
 }
 </style>

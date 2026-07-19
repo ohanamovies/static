@@ -1,7 +1,15 @@
 <template>
   <section class="row" v-if="row.movies.length" ref="rowEl">
-    <div class="row-header">
-      <h2 class="row-label">{{ row.label }}</h2>
+    <div class="row-header" :class="{ 'row-header--slot-actions': $slots.actions }">
+      <div class="row-title">
+        <h2 class="row-label">{{ row.label }}</h2>
+        <slot name="label-actions" :row="row" />
+      </div>
+      <div class="row-actions" v-if="$slots.actions || row.seeAllTo">
+        <slot name="actions" :row="row">
+          <UiChip v-if="row.seeAllTo" :to="row.seeAllTo" size="sm" tone="safe">See all</UiChip>
+        </slot>
+      </div>
     </div>
     <div class="row-track-wrapper">
       <button
@@ -45,6 +53,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import MovieCard from "./MovieCard.vue";
+import UiChip from "@/components/UiChip.vue";
 
 const props = defineProps({ row: { type: Object, required: true } });
 defineEmits(["selectMovie"]);
@@ -146,22 +155,43 @@ onUnmounted(() => {
 
 <style scoped>
 .row {
-  margin-bottom: 36px;
+  margin-bottom: 26px;
 }
 
 .row-header {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
   padding: 0 48px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+.row-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .row-label {
+  min-width: 0;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 21px;
   letter-spacing: 0.06em;
   color: var(--white);
 }
+
+.row-actions {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.row-actions :deep(.ui-chip) { flex: 0 0 auto; }
 
 .row-track-wrapper {
   position: relative;
@@ -171,7 +201,7 @@ onUnmounted(() => {
   display: flex;
   gap: var(--gap);
   overflow-x: auto;
-  padding: 8px 48px 16px;
+  padding: 6px 48px 14px;
   scrollbar-width: none;
   -ms-overflow-style: none;
   /* No scroll-snap: it caused snapping to the sentinel/skeleton elements */
@@ -231,7 +261,20 @@ onUnmounted(() => {
 .row-arrow.hidden { opacity: 0; pointer-events: none; }
 
 @media (max-width: 640px) {
-  .row-header { padding: 0 16px; }
+  .row-header { padding: 0 16px; align-items: center; gap: 10px; }
+  .row-title { max-width: 100%; flex-wrap: wrap; row-gap: 4px; }
+  .row-header--slot-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .row-header--slot-actions .row-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .row-actions { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .row-actions::-webkit-scrollbar { display: none; }
   .row-track  { padding: 8px 16px 16px; }
+  .row-arrow { display: none; }
 }
 </style>

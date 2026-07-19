@@ -5,12 +5,18 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "qa:modal": "node scripts/qa-movie-modal.mjs",
+    "qa:sprint9": "node scripts/qa-sprint9-trust.mjs",
+    "qa:mobile-touch": "node scripts/qa-mobile-touch.mjs",
+    "qa:dev-routes": "node scripts/qa-dev-routes.mjs",
+    "qa:phone-touch": "node scripts/qa-phone-touch.mjs"
   },
   "dependencies": {
     "fuse.js": "^7.0.0",
     "pinia": "^2.1.0",
-    "vue": "^3.4.0"
+    "vue": "^3.4.0",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

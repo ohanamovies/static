@@ -24,9 +24,14 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  /* Prevent accidental double-tap zoom on iOS while preserving pinch zoom. */
+  touch-action: manipulation;
+}
 
 body {
+  touch-action: manipulation;
   background: var(--black);
   color: var(--white);
   font-family: var(--font-body);
@@ -34,6 +39,18 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+[role="button"],
+[role="menuitem"],
+[role="menuitemcheckbox"],
+[role="menuitemradio"] {
+  touch-action: manipulation;
 }
 
 /* Scrollbar */

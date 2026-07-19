@@ -1,9 +1,18 @@
 <template>
   <Teleport to="body">
-    <div class="modal-backdrop" @click.self="$emit('close')" v-if="movie">
-      <div class="modal">
+    <Transition name="modal-pop">
+      <div class="modal-backdrop" @click.self="emit('close')" v-if="movie">
+        <div
+          ref="dialogRef"
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="titleId"
+          tabindex="-1"
+          @keydown="handleDialogKeydown"
+        >
         <!-- Desktop: button sits to the left of the poster, outside it -->
-        <button class="modal-close modal-close--desktop" @click="$emit('close')" aria-label="Go back">
+        <button class="modal-close modal-close--desktop" @click="emit('close')" aria-label="Close movie details">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
@@ -15,7 +24,7 @@
             <span>{{ movie.t }}</span>
           </div>
           <!-- Mobile: button overlaps the poster -->
-          <button class="modal-close modal-close--mobile" @click="$emit('close')" aria-label="Go back">
+          <button class="modal-close modal-close--mobile" @click="emit('close')" aria-label="Close movie details">
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
@@ -57,51 +66,42 @@
             >
               <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/FilmAffinity_logo.svg" alt="FilmAffinity" class="imdb-logo" />
             </a>
-            <span v-if="movie.s" class="modal-badge">TV Season</span>
+            <UiBadge v-if="movie.s" tone="success">TV Season</UiBadge>
           </div>
-          <h2 class="modal-title">{{ movie.t }}</h2>
+          <h2 :id="titleId" class="modal-title">{{ movie.t }}</h2>
 
           <div class="modal-genres">
-            <span v-for="g in genreLabels" :key="g" class="genre-chip">{{ g }}</span>
+            <UiBadge v-for="g in genreLabels" :key="g">{{ g }}</UiBadge>
           </div>
 
-          <!-- Synopsis -->
-          <div class="modal-synopsis" v-if="synopsis || genreLabels.length">
-            <p class="synopsis-text">
-              <span v-if="synopsis">{{ synopsis }}</span>
-              <span v-if="genreLabels.length" class="synopsis-genres">{{ genreLabels.map(g => '#' + g.toLowerCase().replace(/\s+/g, '')).join(' ') }}</span>
-            </p>
+          <div v-if="profileCompatibilityGlance.length" class="profile-glance" aria-label="Suitability across profiles">
+            <button
+              v-for="profile in profileCompatibilityGlance"
+              :key="profile.id"
+              type="button"
+              class="profile-glance-pill"
+              :class="[
+                profile.fits ? 'profile-glance-pill--ok' : 'profile-glance-pill--warn',
+                { 'is-selected': profile.id === selectedDetailProfileId },
+              ]"
+              :aria-pressed="profile.id === selectedDetailProfileId ? 'true' : 'false'"
+              @click="selectedDetailProfileId = profile.id"
+            >
+              {{ profile.label }} {{ profile.fits ? '✓' : '!' }}
+            </button>
           </div>
 
-          <!-- User actions (watched + lists) -->
-          <div v-if="userStore.isLoggedIn" class="modal-user-actions">
-            <div class="user-actions-row">
-              <button
-                class="watched-btn"
-                :class="{ 'watched-btn--active': userStore.isWatched(movie.id) }"
-                @click="userStore.toggleWatched(movie.id)"
-              >
-                {{ userStore.isWatched(movie.id) ? "✓ Watched" : "Mark watched" }}
-              </button>
-
-              <button
-                v-for="list in userStore.lists"
-                :key="list.token"
-                class="list-chip"
-                :class="{ 'list-chip--active': userStore.isInList(list.token, movie.id) }"
-                @click="userStore.toggleMovieInList(list.token, movie.id)"
-              >{{ list.name }}</button>
-
-              <span v-if="!userStore.lists.length" class="no-lists-hint">No lists yet — create one in ⚙ Settings</span>
-            </div>
-          </div>
-
-          <!-- Healthiness: ML scores from stored matMask + links + IMDb community reviews -->
-          <div class="modal-maturity" v-if="movie.mat !== undefined || matReviews">
-            <div class="mat-header">
-              <p class="modal-section-label">Healthiness</p>
-              <div class="mat-links">
-                <span v-if="movie.mpa" class="modal-badge modal-badge--mpa">{{ movie.mpa }}</span>
+          <section v-if="compatibilityRows.length" class="compatibility-summary" aria-labelledby="maturity-section-label">
+            <div class="compatibility-summary-head">
+              <div>
+                <p id="maturity-section-label" class="modal-section-label">Compatible with: <strong>{{ selectedDetailProfileName }}</strong></p>
+                <p class="compatibility-subcopy">Movie score vs. this profile’s allowed level.</p>
+              </div>
+              <div class="compatibility-actions">
+                <UiBadge v-if="movie.mpa" tone="gold">{{ movie.mpa }}</UiBadge>
+                <span class="compatibility-pill" :class="compatibilityOk ? 'compatibility-pill--ok' : 'compatibility-pill--warn'">
+                  {{ hasSelectedMaturityLimits ? (compatibilityOk ? 'Fits selected profile' : 'Review before watching') : 'No limit set' }}
+                </span>
                 <a
                   v-if="movie.id"
                   :href="`https://www.imdb.com/title/${movie.id}/parentalguide`"
@@ -120,46 +120,108 @@
                   v-else
                   :href="'https://www.commonsensemedia.org/search/category/movie/sort/score-desc/'+movie.t"
                   target="_blank" rel="noopener"
-                  class="mat-ext-link mat-ext-link--csm genre-chip--alt"
+                  class="mat-ext-link mat-ext-link--csm"
                   title="Common Sense Media review"
                 >CSM</a>
               </div>
             </div>
-
-            <!-- Score grid from stored bitmask, with per-category detail tags -->
-            <div v-if="movie.mat !== undefined" class="mat-score-grid">
+            <div class="compatibility-grid">
               <div
-                v-for="cat in MATURITY_CATEGORIES"
-                :key="cat.key"
-                class="mat-score-row"
+                v-for="row in compatibilityRows"
+                :key="row.key"
+                class="compatibility-row"
+                :class="{ exceeded: row.exceeded, unknown: row.unknown }"
               >
-                <div class="mat-score-line">
-                  <span class="mat-score-name">{{ cat.label }}</span>
-
+                <div class="compatibility-row-title">
+                  <span>{{ row.label }}</span>
+                  <strong>{{ row.scoreLabel }}</strong>
+                </div>
+                <div class="compatibility-row-meter" aria-hidden="true">
                   <div class="mat-score-bar-wrap">
                     <div
+                      v-if="row.hasMovieScore"
                       class="mat-score-bar"
-                      :class="scoreCssClass(Math.round(getScore(movie.mat, cat.shift)))"
-                      :style="{ width: `${getScore(movie.mat, cat.shift) / 5 * 95+5}%` }"
+                      :class="row.scoreClass"
+                      :style="{ width: row.scoreWidth }"
                     ></div>
-
                   </div>
-                  <span style="font-size: 12px; color: var(--muted); min-width: 20px; flex-shrink: 0;">{{ formatScore(getScore(movie.mat, cat.shift)) }}</span>
-                  <!--<span class="mat-score-label">
-                    {{ SEVERITY_LABELS[Math.round(getScore(movie.mat, cat.shift))] }}
-                  </span>-->
                 </div>
-
-                <div class="mat-score-tags" v-if="extraDetails?.tags?.[TAG_KEYS[cat.key]]?.length">
-                  <span  class="mat-tag"> &#8627; </span>
-                  <span
-                    v-for="g in extraDetails.tags[TAG_KEYS[cat.key]]"
-                    :key="g"
-                    class="mat-tag"
-                  >&nbsp;{{ g.replaceAll('_', ' ').toLowerCase() }}</span>
+                <div class="compatibility-row-detail">
+                  <strong>{{ row.statusLabel }}</strong>
+                  <small>{{ row.allowedDetail }}</small>
+                  <div v-if="row.supportTags.length" class="compatibility-tags" :aria-label="`${row.label} details`">
+                    <span v-for="tag in row.supportTags" :key="tag">{{ tag }}</span>
+                  </div>
                 </div>
               </div>
             </div>
+          </section>
+          <section v-else-if="profileCompatibilityGlance.length" class="compatibility-summary compatibility-summary--empty" aria-labelledby="maturity-section-label">
+            <div class="compatibility-summary-head">
+              <p id="maturity-section-label" class="modal-section-label">Compatible with: <strong>{{ selectedDetailProfileName }}</strong></p>
+              <div class="compatibility-actions">
+                <UiBadge v-if="movie.mpa" tone="gold">{{ movie.mpa }}</UiBadge>
+                <span class="compatibility-pill compatibility-pill--warn">Unknown</span>
+                <a
+                  v-if="movie.id"
+                  :href="`https://www.imdb.com/title/${movie.id}/parentalguide`"
+                  target="_blank" rel="noopener"
+                  class="mat-ext-link"
+                  title="IMDb Parents Guide"
+                >IMDb guide</a>
+                <a
+                  :href="extraDetails?.csm ? 'https://www.commonsensemedia.org'+extraDetails.csm : 'https://www.commonsensemedia.org/search/category/movie/sort/score-desc/'+movie.t"
+                  target="_blank" rel="noopener"
+                  class="mat-ext-link mat-ext-link--csm"
+                  title="Common Sense Media review"
+                >CSM</a>
+              </div>
+            </div>
+            <p class="compatibility-empty-copy">Suitability scores are not available for this title. Use the parental-guide links if you need more confidence.</p>
+          </section>
+
+          <!-- Synopsis -->
+          <div class="modal-synopsis" v-if="synopsis || genreLabels.length">
+            <p class="synopsis-text">
+              <span v-if="synopsis">{{ synopsis }}</span>
+              <span v-if="genreLabels.length" class="synopsis-genres">{{ genreLabels.map(g => '#' + g.toLowerCase().replace(/\s+/g, '')).join(' ') }}</span>
+            </p>
+          </div>
+
+          <!-- User actions (watched + lists) -->
+          <div v-if="userStore.isLoggedIn" class="modal-user-actions">
+            <div class="user-actions-row">
+              <UiChip
+                size="sm"
+                tone="safe"
+                :active="userStore.isWatched(movie.id)"
+                @click="userStore.toggleWatched(movie.id)"
+              >
+                {{ userStore.isWatched(movie.id) ? "✓ Watched" : "Mark watched" }}
+              </UiChip>
+
+              <UiChip
+                v-for="list in userStore.lists"
+                :key="list.token"
+                size="sm"
+                tone="safe"
+                :active="userStore.isInList(list.token, movie.id)"
+                :label="list.name"
+                @click="userStore.toggleMovieInList(list.token, movie.id)"
+              />
+
+              <span v-if="!userStore.lists.length" class="no-lists-hint">No lists yet — create one in Settings</span>
+            </div>
+          </div>
+
+          <!-- Community review excerpts from IMDb, when fetched. Score/evidence rows live in the main maturity section above. -->
+          <details class="modal-maturity" v-if="matReviewsLoading || matReviewsError || matReviewCategories.length">
+            <summary class="mat-header">
+              <p class="modal-section-label">Community parental reviews</p>
+              <div class="mat-links">
+                <UiBadge v-if="movie.mpa" tone="gold">{{ movie.mpa }}</UiBadge>
+              </div>
+            </summary>
 
             <!-- Community review excerpts from IMDb (collapsed per category) -->
             <div v-if="matReviewsLoading" class="mat-loading"><!--Loading community reviews…--></div>
@@ -180,17 +242,23 @@
                 <p v-else class="mat-no-reviews">No community reviews for this category</p>
               </details>
             </div>
-          </div>
+          </details>
 
           <div class="modal-providers" v-if="providerNames.length || userStore.isLoggedIn">
-            <p class="modal-section-label">Available on</p>
+            <div class="providers-head">
+              <p class="modal-section-label">Where to watch</p>
+              <RouterLink v-if="availabilityDetail.action" to="/settings/streaming">Set services</RouterLink>
+            </div>
             <div class="provider-list">
-              <a v-for="p in providerNames" target="_blank" rel="noopener" :key="p" :href="extraDetails?.tmdbUrl+'/watch'" class="provider-chip">{{ p }}</a>
+              <a v-for="p in providerNames" target="_blank" rel="noopener" :key="p" :href="providerWatchUrl" class="provider-chip">{{ p }}</a>
 
               <!-- Custom provider chips -->
-              <a
+              <span
                 v-for="cp in resolvedCustomProviders"
                 :key="cp.urlTemplate"
+                class="provider-chip-wrap"
+              >
+                <a
                 :href="cp.url"
                 target="_blank"
                 rel="noopener"
@@ -198,12 +266,13 @@
                 :title="cp.urlTemplate"
               >
                 {{ cp.domain }}
+                </a>
                 <button
                   class="provider-chip-remove"
                   @click.prevent.stop="userStore.removeCustomProvider(cp.urlTemplate)"
-                  title="Remove provider"
+                  :aria-label="`Remove ${cp.domain} provider`"
                 >×</button>
-              </a>
+              </span>
 
               <!-- Add custom provider button -->
               <div v-if="userStore.isLoggedIn" class="custom-provider-add">
@@ -211,7 +280,7 @@
                   v-if="!showProviderForm"
                   class="provider-chip provider-chip--add"
                   @click="showProviderForm = true"
-                  title="Add custom search provider"
+                  aria-label="Add custom search provider"
                 >+ Add</button>
 
                 <div v-else class="provider-form">
@@ -221,30 +290,120 @@
                     class="provider-input"
                     placeholder="e.g. netflix.com/search?q={title}&y={year}"
                     @keydown.enter="commitProvider"
-                    @keydown.escape="showProviderForm = false; providerInput = ''"
+                    @keydown.escape.stop="showProviderForm = false; providerInput = ''"
                   />
-                  <button class="provider-form-btn provider-form-btn--ok" @click="commitProvider" title="Add">✓</button>
-                  <button class="provider-form-btn provider-form-btn--cancel" @click="showProviderForm = false; providerInput = ''" title="Cancel">×</button>
+                  <button class="provider-form-btn provider-form-btn--ok" @click="commitProvider" aria-label="Add provider">✓</button>
+                  <button class="provider-form-btn provider-form-btn--cancel" @click="showProviderForm = false; providerInput = ''" aria-label="Cancel adding provider">×</button>
                 </div>
               </div>
             </div>
           </div>
         </div>
+        </div>
       </div>
-    </div>
+    </Transition>
   </Teleport>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from "vue";
-import { GENRES, PROVIDERS } from "@/stores/movies.js";
+import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { GENRES, PROVIDERS, useMovieStore } from "@/stores/movies.js";
 import { MATURITY_CATEGORIES, SEVERITY_LABELS, getScore, scoreCssClass } from "@/maturity.js";
 import { useUserStore } from "@/stores/user.js";
+import { lockBodyScroll, unlockBodyScroll, trapTabKey } from "@/composables/modalGuards.js";
+import { profileById, profileLabel } from "@/lib/maturityProfiles.js";
+import UiBadge from "@/components/UiBadge.vue";
+import UiChip from "@/components/UiChip.vue";
 
 const userStore = useUserStore();
+const movieStore = useMovieStore();
 
 const props = defineProps({ movie: { type: Object, default: null } });
-defineEmits(["close"]);
+const emit = defineEmits(["close"]);
+
+const dialogRef = ref(null);
+const previouslyFocused = ref(null);
+const selectedDetailProfileId = ref(movieStore.activeMaturityProfileId);
+let bodyLocked = false;
+
+const titleId = computed(() => props.movie?.id ? `movie-dialog-title-${props.movie.id}` : "movie-dialog-title");
+const selectedDetailProfile = computed(() => profileById(movieStore.maturityProfiles, selectedDetailProfileId.value));
+const selectedDetailProfileName = computed(() => profileLabel(movieStore.maturityProfiles, selectedDetailProfileId.value));
+const selectedMaturityValues = computed(() => selectedDetailProfile.value?.values ?? movieStore.maxMaturityCat);
+const hasSelectedMaturityLimits = computed(() => selectedMaturityValues.value.some(v => v >= 0));
+const compatibilityRows = computed(() => {
+  if (props.movie?.mat === undefined) return [];
+  return MATURITY_CATEGORIES.map((cat, i) => {
+    const allowed = selectedMaturityValues.value[i];
+    const noLimit = allowed < 0;
+    const rawScore = getScore(props.movie.mat, cat.shift);
+    const hasMovieScore = Number.isFinite(rawScore);
+    const movieScore = hasMovieScore ? rawScore : null;
+    const roundedScore = hasMovieScore ? Math.round(rawScore) : null;
+    const movieLabel = hasMovieScore ? SEVERITY_LABELS[roundedScore] || "Unknown" : "Unknown";
+    const supportTags = (extraDetails.value?.tags?.[TAG_KEYS[cat.key]] || [])
+      .slice(0, 4)
+      .map(tag => tag.replaceAll('_', ' ').toLowerCase());
+    const unknown = !hasMovieScore;
+    const exceeded = !noLimit && hasMovieScore && roundedScore > allowed;
+    const allowedLabel = noLimit ? "No limit set" : `Allowed ${allowed} (${(SEVERITY_LABELS[allowed] || "Any").toLowerCase()})`;
+    return {
+      key: cat.key,
+      label: cat.label,
+      hasMovieScore,
+      movieScore,
+      scoreLabel: hasMovieScore ? `${formatScore(rawScore)}/5` : "Unknown",
+      scoreWidth: hasMovieScore ? `${Math.max(5, Math.min(100, (rawScore / 5) * 95 + 5))}%` : "0%",
+      scoreClass: hasMovieScore ? scoreCssClass(roundedScore) : "sev-nan",
+      movieLabel,
+      allowedLabel,
+      allowedDetail: noLimit ? `${movieLabel} · No limit set` : `${movieLabel} · ${allowedLabel}`,
+      statusLabel: unknown ? "Unknown" : noLimit ? "No limit set" : exceeded ? "Exceeds profile" : "Fits profile",
+      supportTags,
+      unknown,
+      exceeded,
+    };
+  });
+});
+const compatibilityOk = computed(() => compatibilityRows.value.length > 0 && compatibilityRows.value.every(row => !row.exceeded && !row.unknown));
+function profileFitsMovie(profile) {
+  if (!profile?.values?.some(v => v >= 0)) return true;
+  if (props.movie?.mat === undefined) return false;
+  return profile.values.every((allowed, i) => {
+    if (allowed < 0) return true;
+    const rawScore = getScore(props.movie.mat, MATURITY_CATEGORIES[i].shift);
+    const movieScore = Number.isFinite(rawScore) ? Math.round(rawScore) : 6;
+    return movieScore <= allowed;
+  });
+}
+
+const profileCompatibilityGlance = computed(() => {
+  return movieStore.maturityProfiles
+    .slice(0, 5)
+    .map(profile => ({
+      id: profile.id,
+      label: profile.label,
+      fits: profileFitsMovie(profile),
+    }));
+});
+
+function focusDialog() {
+  dialogRef.value?.focus({ preventScroll: true });
+}
+
+function handleDialogKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    emit("close");
+    return;
+  }
+  trapTabKey(event, dialogRef.value);
+}
+
+function restoreFocus() {
+  previouslyFocused.value?.focus?.({ preventScroll: true });
+  previouslyFocused.value = null;
+}
 
 // ─── Extra Data Lookup Management ───────────────────────────────────────────
 // Holds the parsed key-value dictionary from extra.json
@@ -254,15 +413,23 @@ const extraLoaded = ref(false);
 async function loadExtraJsonData() {
   if (extraLoaded.value) return; // Prevent multiple global fetches
   try {
-    // Assuming extra.json is placed inside your public directory alongside movies.json
-    const res = await fetch("/extra.json");
-    if (res.ok) {
-      const data = await res.json();
-      extraTable.value = data || {};
+    // extra.json is optional enrichment. Static hosts may serve index.html for
+    // missing files, so verify the response before attempting JSON parsing.
+    const res = await fetch("/extra.json", { headers: { Accept: "application/json" } });
+    const contentType = res.headers.get("content-type") || "";
+
+    if (!res.ok || !contentType.includes("application/json")) {
+      extraTable.value = {};
       extraLoaded.value = true;
+      return;
     }
-  } catch (error) {
-    console.error("Failed to preload extra.json table:", error);
+
+    const data = await res.json();
+    extraTable.value = data && typeof data === "object" ? data : {};
+  } catch {
+    extraTable.value = {};
+  } finally {
+    extraLoaded.value = true;
   }
 }
 
@@ -277,10 +444,8 @@ const synopsis = computed(() => {
   if (!props.movie) return null;
   // 1. Check if the active movie element already contains an overview variant
   if (props.movie.overviewEs || props.movie.overviewEn) {
-    console.log(props, props.movie)
     return props.movie.overviewEs || props.movie.overviewEn;
   }
-  console.log(extraDetails.value)
   // 2. Return the pre-scraped English synopsis retrieved from our table
   return extraDetails.value?.synopsisEn || null;
 });
@@ -352,7 +517,19 @@ const providerNames = computed(() => {
   if (!props.movie) return [];
   return PROVIDERS
     .filter(p => props.movie.prov & p.bit)
+    .sort((a, b) => Number(Boolean(movieStore.selectedProviders & b.bit)) - Number(Boolean(movieStore.selectedProviders & a.bit)))
     .map(p => p.name);
+});
+const providerWatchUrl = computed(() => extraDetails.value?.tmdbUrl ? `${extraDetails.value.tmdbUrl}/watch` : `https://www.themoviedb.org/search?query=${encodeURIComponent(props.movie?.t || "")}`);
+
+const availabilityDetail = computed(() => {
+  if (!props.movie?.prov && !resolvedCustomProviders.value.length) return { action: true };
+  if (!movieStore.selectedProviders) return { action: true };
+  const selectedNames = PROVIDERS
+    .filter(p => movieStore.selectedProviders & p.bit)
+    .map(p => p.name);
+  const configured = providerNames.value.filter(name => selectedNames.includes(name));
+  return { action: !configured.length };
 });
 
 // ─── Custom providers ─────────────────────────────────────────────────────────
@@ -427,15 +604,31 @@ function commitProvider() {
 // ─── Watch for movie changes ──────────────────────────────────────────────────
 watch(() => props.movie, (movie) => {
   if (movie) {
+    selectedDetailProfileId.value = movieStore.activeMaturityProfileId;
+    if (!bodyLocked) {
+      previouslyFocused.value = document.activeElement;
+      lockBodyScroll();
+      bodyLocked = true;
+    }
     //loadSynopsis(movie);
     loadExtraJsonData()
     //loadReviews(movie.id);
+    nextTick(focusDialog);
   } else {
     //synopsis.value = null;
     matReviews.value = null;
     matReviewsError.value = null;
+    if (bodyLocked) {
+      unlockBodyScroll();
+      bodyLocked = false;
+    }
+    nextTick(restoreFocus);
   }
 }, { immediate: true });
+
+onUnmounted(() => {
+  if (bodyLocked) unlockBodyScroll();
+});
 </script>
 
 <style scoped>
@@ -445,18 +638,48 @@ watch(() => props.movie, (movie) => {
   inset: 0;
   background: var(--background, #0b0b0e);
   z-index: 100;
-  width: 100vw;
+  width: 100%;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 0;
   backdrop-filter: blur(6px);
   animation: fadeIn 0.15s ease;
-  overflow-y: auto;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
-@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+.modal-pop-enter-active,
+.modal-pop-leave-active {
+  transition: opacity 0.24s ease;
+}
+
+.modal-pop-enter-active .modal,
+.modal-pop-leave-active .modal {
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease;
+}
+
+.modal-pop-enter-from,
+.modal-pop-leave-to {
+  opacity: 0;
+}
+
+.modal-pop-enter-from .modal,
+.modal-pop-leave-to .modal {
+  opacity: 0.96;
+  transform: translateY(96px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-pop-enter-active,
+  .modal-pop-leave-active,
+  .modal-pop-enter-active .modal,
+  .modal-pop-leave-active .modal {
+    transition: none;
+  }
+}
 
 .modal {
   background: var(--background, #0b0b0e);
@@ -464,12 +687,16 @@ watch(() => props.movie, (movie) => {
   border-radius: 0;
   max-width: 900px;
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   gap: 24px;
   padding: 32px 24px 56px 24px;
   position: relative;
-  overflow-y: visible;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  outline: none;
 }
 
 .modal-close {
@@ -538,24 +765,17 @@ watch(() => props.movie, (movie) => {
 }
 .modal-year { font-size: 13px; color: var(--muted); }
 .modal-rating { font-size: 14px; font-weight: 500; color: var(--gold); }
-.imdb-link { display: inline-flex; align-items: center; text-decoration: none; }
-.imdb-logo { height: 12px; width: auto; border-radius: 2px; }
-
-.modal-badge {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 2px 8px;
-  background: rgba(45,212,191,0.15);
-  border: 1px solid rgba(45,212,191,0.3);
-  border-radius: 99px;
-  color: var(--teal);
+.imdb-link,
+.ext-site-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 5px 4px;
+  text-decoration: none;
 }
-.modal-badge--mpa {
-  background: rgba(250,204,21,0.1);
-  border-color: rgba(250,204,21,0.3);
-  color: #facc15;
-}
+.imdb-logo { height: 18px; width: auto; border-radius: 2px; }
 
 .modal-title {
   font-family: var(--font-display);
@@ -571,15 +791,6 @@ watch(() => props.movie, (movie) => {
 }
 /* The top genre block (above synopsis) is now hidden — genres shown inline as hashtags */
 .modal-body > .modal-genres { display: none; }
-.genre-chip {
-  padding: 3px 10px;
-  background: var(--surface3);
-  border: 1px solid var(--border);
-  border-radius: 99px;
-  font-size: 12px;
-  color: var(--white);
-}
-
 .genre-chip--alt {
   background: var(--surface);
   border-color: transparent;/**/
@@ -613,9 +824,31 @@ watch(() => props.movie, (movie) => {
 
 /* ── Providers ── */
 .modal-providers { margin-bottom: 18px; }
+.providers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.providers-head a {
+  color: var(--teal);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.availability-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.availability-note--ok { color: var(--teal); }
+.availability-note--warn { color: #fca5a5; }
 .provider-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .provider-chip {
-  padding: 4px 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 12px;
   background: rgba(45,212,191,0.12);
   border: 1px solid rgba(45,212,191,0.25);
   border-radius: 6px;
@@ -625,22 +858,30 @@ watch(() => props.movie, (movie) => {
 }
 
 /* ── Custom providers ── */
-.provider-chip--custom {
+.provider-chip-wrap {
   position: relative;
-  padding-right: 22px;
+  display: inline-flex;
+}
+.provider-chip--custom {
+  padding-right: 32px;
 }
 .provider-chip-remove {
   position: absolute;
-  right: 4px;
+  right: 2px;
   top: 50%;
   transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  min-height: 26px;
   background: none;
   border: none;
   color: var(--muted);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  padding: 0 2px;
+  padding: 0;
   border-radius: 99px;
   transition: color 0.12s;
 }
@@ -692,15 +933,20 @@ watch(() => props.movie, (movie) => {
 .provider-form-btn--ok:hover   { color: var(--teal);  border-color: rgba(45,212,191,0.4); }
 .provider-form-btn--cancel:hover { color: #f87171; border-color: rgba(248,113,113,0.35); }
 
-/* ── Healthiness section ── */
+/* ── Supporting parental-guide detail ── */
 .modal-maturity { margin-bottom: 18px; }
+.modal-maturity:not([open]) { margin-bottom: 12px; }
 
 .mat-header {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+  cursor: pointer;
+  list-style: none;
 }
+.mat-header::-webkit-details-marker { display: none; }
+.modal-maturity:not([open]) .mat-header { margin-bottom: 0; }
 
 .mat-links {
   display: flex;
@@ -709,10 +955,13 @@ watch(() => props.movie, (movie) => {
 }
 
 .mat-ext-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
   font-size: 11px;
   color: var(--muted);
   text-decoration: none;
-  padding: 2px 8px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 99px;
   transition: color 0.15s, border-color 0.15s;
@@ -749,6 +998,8 @@ watch(() => props.movie, (movie) => {
   scrollbar-width: none;    /* Firefox */
   -ms-overflow-style: none; /* IE/Edge */
   padding-left: 15px;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .mat-score-tags::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
@@ -879,6 +1130,135 @@ watch(() => props.movie, (movie) => {
 }
 .mat-items li:last-child { border-bottom: none; }
 
+.profile-glance {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 0 14px;
+  padding-bottom: 2px;
+}
+.profile-glance::-webkit-scrollbar { display: none; }
+.profile-glance-pill {
+  border: 1px solid transparent;
+  font-family: var(--font-body);
+  cursor: pointer;
+  flex: 0 0 auto;
+  min-height: 34px;
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 750;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.profile-glance-pill:hover,
+.profile-glance-pill:focus-visible {
+  outline: none;
+  border-color: rgba(45,212,191,0.42);
+}
+.profile-glance-pill.is-selected {
+  border-color: rgba(45,212,191,0.5);
+  box-shadow: 0 0 0 1px rgba(45,212,191,0.12) inset;
+}
+.profile-glance-pill--ok { color: var(--teal); background: rgba(45,212,191,0.1); }
+.profile-glance-pill--warn { color: #f5c842; background: rgba(245,200,66,0.11); }
+
+/* ── Compatibility summary ── */
+.compatibility-summary {
+  margin: 14px 0 18px;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.035);
+}
+.compatibility-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.compatibility-summary strong { color: var(--white); }
+.compatibility-subcopy {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.compatibility-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.compatibility-pill {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+.compatibility-pill--ok { background: rgba(45,212,191,0.12); color: var(--teal); }
+.compatibility-pill--warn { background: rgba(245,200,66,0.13); color: #f5c842; }
+.compatibility-grid { display: grid; gap: 8px; }
+.compatibility-row {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.75fr) minmax(96px, 1fr) minmax(150px, 1.2fr);
+  align-items: center;
+  gap: 12px;
+  color: rgba(240,238,232,0.82);
+  font-size: 12px;
+}
+.compatibility-row-title,
+.compatibility-row-detail {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.compatibility-row-title span { color: var(--white); font-weight: 650; }
+.compatibility-row-title strong {
+  color: var(--white);
+  font-family: var(--font-display);
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+.compatibility-row-detail strong { color: var(--teal); font-size: 11px; }
+.compatibility-row.exceeded .compatibility-row-detail strong { color: #f5c842; }
+.compatibility-row.unknown .compatibility-row-detail strong { color: var(--muted); }
+.compatibility-row small { color: var(--teal); }
+.compatibility-row.exceeded small { color: #f5c842; }
+.compatibility-row.unknown small { color: var(--muted); }
+.compatibility-row-meter { min-width: 0; }
+.compatibility-empty-copy {
+  margin: 0;
+  color: rgba(240,238,232,0.76);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.compatibility-tags {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.compatibility-tags::-webkit-scrollbar { display: none; }
+.compatibility-tags span {
+  flex: 0 0 auto;
+  max-width: 148px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 /* ── User actions ── */
 .modal-user-actions { margin-bottom: 18px; }
 
@@ -887,44 +1267,6 @@ watch(() => props.movie, (movie) => {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-}
-
-.watched-btn {
-  padding: 5px 14px;
-  border-radius: 99px;
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--surface3);
-  color: var(--muted);
-  transition: all 0.15s;
-}
-.watched-btn:hover { border-color: rgba(255,255,255,0.2); color: var(--white); }
-.watched-btn--active {
-  background: rgba(45, 212, 191, 0.15);
-  border-color: rgba(45, 212, 191, 0.35);
-  color: var(--teal);
-}
-
-.list-chip {
-  padding: 5px 14px;
-  border-radius: 99px;
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--surface3);
-  color: var(--muted);
-  transition: all 0.15s;
-}
-.list-chip:hover { border-color: rgba(255,255,255,0.2); color: var(--white); }
-.list-chip--active {
-  background: rgba(45,212,191,0.15);
-  border-color: rgba(45,212,191,0.35);
-  color: var(--teal);
 }
 
 .no-lists-hint {
@@ -937,12 +1279,31 @@ watch(() => props.movie, (movie) => {
 @media (max-width: 560px) {
   .modal {
     flex-direction: column;
-    padding: 16px 16px 40px 16px;
+    padding: calc(48px + env(safe-area-inset-top, 0px)) 16px 40px 16px;
     gap: 16px;
+    max-width: none;
   }
   .modal-poster { width: 100%; height: 200px; }
   .modal-poster img { object-position: center top; }
   .modal-close--desktop { display: none; }
-  .modal-close--mobile  { display: flex; }
+  .modal-close--mobile  {
+    position: fixed;
+    top: calc(10px + env(safe-area-inset-top, 0px));
+    left: 12px;
+    z-index: 120;
+    display: flex;
+    width: 44px;
+    height: 44px;
+    background: rgba(8,8,16,0.82);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.32);
+  }
+  .modal-close--mobile svg { width: 18px; height: 18px; }
+  .compatibility-summary-head { flex-direction: column; }
+  .compatibility-actions { justify-content: flex-start; }
+  .compatibility-row { grid-template-columns: 1fr; gap: 6px; }
+  .compatibility-row-title {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+  }
 }
 </style>

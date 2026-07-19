@@ -1,0 +1,22 @@
+[build]
+  command = "cd website && npm ci && npm run build"
+  publish = "website/dist"
+
+# Keep Netlify deploys small: the generated movie data is large and ignored locally.
+# Proxy it from the canonical static data host instead of committing/deploying it here.
+[[redirects]]
+  from = "/movies.json"
+  to = "https://ohana.tv/movies.json"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/extra.json"
+  to = "https://ohana.tv/extra.json"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

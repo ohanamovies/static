@@ -43,6 +43,11 @@ const EXTRA_FILE = path.join(OUT_DIR, "extra.json");
 const IMDB_BASICS_URL = "https://datasets.imdbws.com/title.basics.tsv.gz";
 const IMDB_RATINGS_URL = "https://datasets.imdbws.com/title.ratings.tsv.gz";
 const TOP_N = 100_000;
+const MIN_VOTES = 750;
+const MIN_RATING = 5;
+// Keep new/recent titles even before IMDb has enough ratings data.
+// IMDb exposes release dates as years in title.basics, so use a coarse year window.
+const RECENT_RELEASE_YEAR_WINDOW = 1;
 const TMDB_RATE_LIMIT = 40; // requests per window
 const TMDB_RATE_WINDOW = 2_000; // ms
 const MAT_RATE_LIMIT = 8; // imdbapi.dev rate limit per window
@@ -284,11 +289,14 @@ async function buildTopN() {
 
   log("Parsing IMDb basics...");
   const titles = [];
+  const recentOrFutureTitles = [];
   const allTitlesMap = new Map(); // imdbId → movie object, unfiltered
+  const currentYear = new Date().getFullYear();
+  const recentReleaseCutoffYear = currentYear - RECENT_RELEASE_YEAR_WINDOW;
+
   await parseTsv("./title.basics.tsv", (row) => {
     // Include movies and TV seasons only
     if (row.titleType !== "movie" && row.titleType !== "tvSeries") return;
-    if (!ratings.has(row.tconst)) return;
     if (row.isAdult === "1") return;
 
     const genreList = row.genres === "\\N" ? [] : row.genres.split(",");
@@ -300,27 +308,38 @@ async function buildTopN() {
       if (GENRE_MAP[g] !== undefined) genreMask |= GENRE_MAP[g];
     }
 
-    const r = ratings.get(row.tconst)
+    const ratingInfo = ratings.get(row.tconst);
+    const year = row.startYear === "\\N" ? null : parseInt(row.startYear, 10);
+    const isRecentOrFutureRelease = year !== null && year >= recentReleaseCutoffYear;
     const entry = {
       id: row.tconst,
       title: row.primaryTitle,
-      year: row.startYear === "\\N" ? null : parseInt(row.startYear),
-      rating: r.rating,
-      votes: r.votes,
+      year,
+      rating: ratingInfo?.rating,
+      votes: ratingInfo?.votes ?? 0,
       genres: genreMask,
       isSeason: row.titleType === "tvSeries",
     };
     //allTitlesMap.set(row.tconst, entry);
-    // Apply quality filter for the main ranked list
-    if (r.votes >= 750 && r.rating >= 5) titles.push(entry);
+
+    // Apply the normal quality filter for established titles, but don't let sparse
+    // IMDb ratings data hide unreleased or newly released titles.
+    if (ratingInfo?.votes >= MIN_VOTES && ratingInfo.rating >= MIN_RATING) {
+      titles.push(entry);
+    } else if (isRecentOrFutureRelease) {
+      recentOrFutureTitles.push(entry);
+    }
   });
 
-  log(`Found ${titles.length} titles passing quality filter (movies + TV seasons). Sorting by votes × rating...`);
+  log(`Found ${titles.length} titles passing quality filter and ${recentOrFutureTitles.length} recent/future titles with sparse ratings (movies + TV seasons). Sorting by votes × rating...`);
   titles.sort((a, b) => b.votes * b.rating - a.votes * a.rating);
   const top = titles.slice(0, TOP_N);
-  log(`Top ${top.length} titles selected.`);
+  const selected = new Map(top.map((movie) => [movie.id, movie]));
+  for (const movie of recentOrFutureTitles) selected.set(movie.id, movie);
+  const movies = [...selected.values()];
+  log(`Selected ${movies.length} titles (${top.length} ranked + ${movies.length - top.length} recent/future sparse-rating titles).`);
   if (global.gc) global.gc();
-  return { movies: top, allTitlesMap };
+  return { movies, allTitlesMap };
 }
 
 // ─── Step 3: TMDB enrichment ───────────────────────────────────────────────────

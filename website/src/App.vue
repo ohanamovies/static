@@ -1,226 +1,193 @@
 <template>
-  <div class="app">
-    <HeroSection />
+  <RouterView
+    v-slot="{ Component }"
+    @selectMovie="openMovie"
+    @openSettings="openSettings"
+  >
+    <div class="app" :class="{ 'app--with-tabs': activeTab }">
+      <header v-if="activeTab && !store.loading" class="app-header" aria-label="Ohana TV">
+        <RouterLink class="app-brand" to="/discover" aria-label="Ohana TV home">
+          <img src="/logo.png" alt="" />
+          <span>Ohana TV</span>
+        </RouterLink>
+      </header>
 
-    <main class="catalog">
-      <!-- Still loading: show skeleton rows -->
-      <template v-if="store.loading">
-        <div class="skeleton-row" v-for="n in 3" :key="n">
-          <div class="skeleton-label"></div>
-          <div class="skeleton-cards">
-            <div class="skeleton-card" v-for="c in 8" :key="c"></div>
-          </div>
+      <component
+        :is="Component"
+        @selectMovie="openMovie"
+        @openSettings="openSettings"
+      />
+
+      <footer class="footer" v-if="activeTab && !store.loading">
+        <p><RouterLink to="/roadmap">Vision</RouterLink> · Data from <a href="https://www.imdb.com" target="_blank" rel="noopener">IMDb</a> &amp; <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Not affiliated with either.</p>
+      </footer>
+
+      <AppTabs v-if="activeTab" :active-tab="activeTab" @select="goToTab" />
+
+      <div
+        v-if="pendingMovieId && !selectedMovie"
+        class="movie-loading-backdrop"
+        role="status"
+        aria-live="polite"
+        aria-label="Loading movie details"
+      >
+        <div class="movie-loading-card">
+          <div class="movie-loading-spinner" aria-hidden="true"></div>
+          <p class="movie-loading-title">Loading movie details…</p>
         </div>
-      </template>
+      </div>
 
-      <template v-else>
-        <div v-if="store.filteredMovies.length === 0" class="empty-state">
-          <p class="empty-icon">◌</p>
-          <p class="empty-title">No movies match your filters</p>
-          <button class="clear-btn" @click="store.clearFilters">Clear all filters</button>
-        </div>
+      <MovieModal
+        :movie="selectedMovie"
+        @close="closeMovie"
+      />
 
-        <template v-else>
-          <!-- Search results: flat grid, rows hidden -->
-          <div v-if="store.searchQuery" class="search-results-grid">
-            <div class="search-results-header">
-              <h2>Results for "<em>{{ store.searchQuery }}</em>"</h2>
-              <span>{{ store.filteredMovies.length }} titles</span>
-            </div>
-            <MovieRow
-              :key="store.searchQuery"
-              :row="{ movies: store.filteredMovies, label: ''}"
-              @selectMovie="selectedMovie = $event"
-            />
-          </div>
-
-          <!-- Normal rows (hidden while searching) -->
-          <template v-else>
-            <!-- User list rows -->
-            <MovieRow
-              v-for="row in listRows"
-              :key="row.id"
-              :row="row"
-              @selectMovie="selectedMovie = $event"
-            />
-            <!-- Regular store rows -->
-            <MovieRow
-              v-for="row in filteredMovieRows"
-              :key="row.id"
-              :row="row"
-              @selectMovie="selectedMovie = $event"
-            />
-            <!-- Watched row (always last) -->
-            <MovieRow
-              v-if="watchedRow"
-              :key="watchedRow.id"
-              :row="watchedRow"
-              @selectMovie="selectedMovie = $event"
-            />
-          </template>
-        </template>
-      </template>
-    </main>
-
-    <footer class="footer" v-if="!store.loading">
-      <p>Data from <a href="https://www.imdb.com" target="_blank" rel="noopener">IMDb</a> &amp; <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Not affiliated with either.</p>
-    </footer>
-
-    <MovieModal
-      :movie="selectedMovie"
-      @close="selectedMovie = null"
-    />
-
-    <!-- Gear button -->
-    <button class="gear-btn" @click="showConfig = true" title="Settings">⚙</button>
-
-    <!-- Config modal -->
-    <ConfigModal
-      v-if="showConfig"
-      :pending-list-token="pendingListToken"
-      @close="showConfig = false"
-    />
-  </div>
+      <ConfigModal
+        v-if="showConfig && pendingListToken"
+        :pending-list-token="pendingListToken"
+        @close="showConfig = false"
+      />
+    </div>
+  </RouterView>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useMovieStore } from "@/stores/movies.js";
 import { useUserStore } from "@/stores/user.js";
-import HeroSection from "@/components/HeroSection.vue";
-import MovieRow from "@/components/MovieRow.vue";
-import MovieCard from "@/components/MovieCard.vue";
+import { addRecentViewed } from "@/lib/recentActivity.js";
+import AppTabs from "@/components/AppTabs.vue";
 import MovieModal from "@/components/MovieModal.vue";
 import ConfigModal from "@/components/ConfigModal.vue";
 
+const router = useRouter();
+const route = useRoute();
 const store = useMovieStore();
 const userStore = useUserStore();
+
 const selectedMovie = ref(null);
+const pendingMovieId = ref(null);
 const showConfig = ref(false);
 const pendingListToken = ref(null);
 
-// Map of imdb id -> movie object for list rows
+const activeTab = computed(() => route.meta?.tab || null);
+
 const movieById = computed(() => {
   const map = new Map();
-  for (const m of store.allMovies) map.set(m.id, m);
+  for (const movie of store.allMovies) map.set(movie.id, movie);
   return map;
 });
 
-// List rows derived from user lists
-const listRows = computed(() => {
-  if (!userStore.isLoggedIn) return [];
-  return userStore.lists
-    .filter(list => list.movies.length > 0)
-    .map(list => ({
-      id: "list-" + list.token,
-      label: "★ " + list.name,
-      movies: list.movies.map(id => movieById.value.get(id)).filter(Boolean),
-    }))
-    .filter(row => row.movies.length > 0);
-});
-
-// Store rows with watched movies filtered out (only when logged in)
-const filteredMovieRows = computed(() => {
-  const watched = userStore.watchedSet;
-  if (!userStore.isLoggedIn || watched.size === 0) return store.movieRows;
-  return store.movieRows.map(row => ({
-    ...row,
-    movies: row.movies.filter(m => !watched.has(m.id)),
-  })).filter(row => row.movies.length >= 4);
-});
-
-// Watched row — shown last when the user has watched at least one movie
-const watchedRow = computed(() => {
-  if (!userStore.isLoggedIn || userStore.watchedSet.size === 0) return null;
-  const movies = [...userStore.watchedSet]
-    .map(id => movieById.value.get(id))
-    .filter(Boolean)
-    .reverse(); // most recently marked first
-  if (movies.length === 0) return null;
-  return { id: "watched", label: "Watch again", movies };
-});
-
-// ── URL routing ──────────────────────────────────────────────────────────────
-function movieToUrl(movie) {
-  return `?movie=${movie.id}`;
+function goToTab(tab) {
+  if (route.name !== tab) router.push({ name: tab });
 }
 
-function openMovieById(imdbId) {
-  if (!imdbId) return;
-  const movie = movieById.value.get(imdbId);
-  if (movie) selectedMovie.value = movie;
-}
-
-// Push URL when modal opens/closes
-watch(selectedMovie, (movie) => {
-  if (movie) {
-    history.pushState({ imdbId: movie.id }, "", movieToUrl(movie));
-  } else {
-    history.pushState(null, "", window.location.pathname);
+function openSettings(section = null) {
+  if (typeof section === "string" && section) {
+    router.push({ name: "settings-section", params: { section } });
+    return;
   }
+  router.push({ name: "settings" });
+}
+
+function openMovie(movie) {
+  if (!movie) return;
+  pendingMovieId.value = movie.id;
+  selectedMovie.value = movie;
+  addRecentViewed(movie.id);
+  router.push({ query: { ...route.query, movie: movie.id } });
+}
+
+function closeMovie() {
+  const { movie, ...query } = route.query;
+  selectedMovie.value = null;
+  pendingMovieId.value = null;
+  if (movie) router.replace({ query });
+}
+
+watch(() => route.name, (name) => {
+  if (name !== "search") store.searchQuery = "";
 });
 
-function onPopState() {
-  const id = new URLSearchParams(window.location.search).get("movie");
-  if (id) openMovieById(id);
-  else selectedMovie.value = null;
-}
+watch([() => route.query.movie, movieById], ([movieId]) => {
+  if (!movieId) {
+    selectedMovie.value = null;
+    pendingMovieId.value = null;
+    return;
+  }
+
+  const id = Array.isArray(movieId) ? movieId[0] : movieId;
+  pendingMovieId.value = id;
+  const movie = movieById.value.get(id);
+  if (movie) selectedMovie.value = movie;
+}, { immediate: true });
 
 // ── Filter persistence ────────────────────────────────────────────────────────
-// Sync maturity + provider filters from user data after login
 watch(() => userStore.isLoggedIn, (loggedIn) => {
   if (!loggedIn) return;
   const prefs = userStore.userData?.filterPrefs;
   if (!prefs) return;
-  if (Array.isArray(prefs.maxMaturityCat)) {
-    prefs.maxMaturityCat.forEach((v, i) => store.setMaxMaturityCat(i, v));
+  store.setMaturityProfiles(prefs.maturityProfiles, prefs.maxMaturityCat);
+  if (prefs.activeMaturityProfileId) {
+    store.selectMaturityProfile(prefs.activeMaturityProfileId);
+  } else if (Array.isArray(prefs.maxMaturityCat)) {
+    store.setMaxMaturityCats(prefs.maxMaturityCat, "me");
   }
   if (prefs.selectedProviders !== undefined) {
     store.selectedProviders = prefs.selectedProviders;
   }
+  if (["both", "movies", "tv"].includes(prefs.titleType)) {
+    store.titleType = prefs.titleType;
+  }
 }, { immediate: true });
 
-// Debounced save of filter prefs to user data
 let filterSaveTimer = null;
-watch([() => [...store.maxMaturityCat], () => store.selectedProviders], () => {
+watch([
+  () => store.activeMaturityProfileId,
+  () => store.maturityProfiles.map(profile => `${profile.id}:${profile.label}:${profile.values.join(',')}`).join('|'),
+  () => [...store.maxMaturityCat],
+  () => store.selectedProviders,
+  () => store.titleType,
+], () => {
   if (!userStore.isLoggedIn) return;
   clearTimeout(filterSaveTimer);
   filterSaveTimer = setTimeout(() => {
     userStore.saveFilterPrefs({
       maxMaturityCat: [...store.maxMaturityCat],
+      activeMaturityProfileId: store.activeMaturityProfileId,
+      maturityProfiles: store.maturityProfiles.map(profile => ({
+        id: profile.id,
+        label: profile.label,
+        description: profile.description,
+        values: [...profile.values],
+        builtIn: profile.builtIn,
+      })),
       selectedProviders: store.selectedProviders,
+      titleType: store.titleType,
     });
   }, 800);
 }, { deep: true });
 
 onMounted(async () => {
-  window.addEventListener("popstate", onPopState);
+  const addToken = route.query.add;
 
   await store.loadMovies();
   await userStore.init();
 
-  // Handle ?add= URL param
-  const params = new URLSearchParams(window.location.search);
-  const addToken = params.get("add");
-  const movieId  = params.get("movie");
-
   if (addToken) {
+    const token = Array.isArray(addToken) ? addToken[0] : addToken;
     if (userStore.isLoggedIn) {
-      try { await userStore.addListByToken(addToken); }
+      try { await userStore.addListByToken(token); }
       catch (e) { console.warn("Could not add shared list:", e.message); }
     } else {
-      pendingListToken.value = addToken;
+      pendingListToken.value = token;
       showConfig.value = true;
     }
-    // Remove ?add= but preserve ?movie= if present
-    const clean = new URLSearchParams();
-    if (movieId) clean.set("movie", movieId);
-    const qs = clean.toString();
-    history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }
 
-  // Handle direct ?movie=tt1234567 URL
-  if (movieId) openMovieById(movieId);
+    const { add, ...query } = route.query;
+    router.replace({ query });
+  }
 });
 </script>
 
@@ -231,157 +198,79 @@ onMounted(async () => {
   flex-direction: column;
 }
 
-/* ── Loading ── */
-.loading-screen {
-  flex: 1;
+.app--with-tabs {
+  padding-bottom: calc(76px + env(safe-area-inset-bottom));
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  padding: 10px 48px;
+  background: linear-gradient(rgba(8,8,16,0.92), rgba(8,8,16,0.68));
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+}
+
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--white);
+  text-decoration: none;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.app-brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.movie-loading-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 8, 16, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.movie-loading-card {
+  width: min(260px, 100%);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 20px;
-}
-
-.loading-logo {
-  font-family: var(--font-display);
-  font-size: clamp(36px, 8vw, 64px);
-  letter-spacing: 0.12em;
-  color: var(--white);
-}
-
-.loading-bar {
-  width: 200px;
-  height: 3px;
-  background: var(--surface3);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.loading-bar-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 99px;
-  animation: loadProgress 1.5s ease-in-out infinite;
-}
-
-@keyframes loadProgress {
-  0% { width: 0%; margin-left: 0; }
-  50% { width: 60%; }
-  100% { width: 0%; margin-left: 100%; }
-}
-
-.loading-text {
-  font-size: 13px;
-  color: var(--muted);
-}
-
-/* ── Catalog ── */
-.catalog {
-  flex: 1;
-  padding-bottom: 60px;
-}
-
-/* ── Skeleton loader ── */
-.skeleton-row {
-  margin-bottom: 36px;
-  padding: 0 48px;
-}
-
-.skeleton-label {
-  width: 160px;
-  height: 22px;
-  background: var(--surface2);
-  border-radius: 4px;
-  margin-bottom: 14px;
-  animation: pulse 1.8s ease-in-out infinite;
-}
-
-.skeleton-cards {
-  display: flex;
-  gap: var(--gap);
-}
-
-.skeleton-card {
-  width: var(--card-w);
-  height: var(--card-h);
-  flex-shrink: 0;
-  background: var(--surface2);
-  border-radius: var(--radius);
-  animation: pulse 1.8s ease-in-out infinite;
-}
-
-.skeleton-card:nth-child(2) { animation-delay: 0.1s; }
-.skeleton-card:nth-child(3) { animation-delay: 0.2s; }
-.skeleton-card:nth-child(4) { animation-delay: 0.3s; }
-.skeleton-card:nth-child(5) { animation-delay: 0.4s; }
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.6; }
-}
-
-/* ── Empty state ── */
-.empty-state {
-  text-align: center;
-  padding: 80px 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.empty-icon { font-size: 48px; color: var(--muted); }
-.empty-title { font-size: 18px; color: var(--muted); }
-
-.clear-btn {
-  margin-top: 8px;
-  padding: 8px 20px;
-  background: var(--accent);
-  border: none;
-  border-radius: 99px;
-  color: var(--white);
-  font-family: var(--font-body);
-  font-size: 13px;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-.clear-btn:hover { opacity: 0.85; }
-
-/* ── Search results grid ── */
-.search-results-grid {
-  padding: 0 48px;
-}
-
-.search-results-header {
-  display: flex;
-  align-items: baseline;
   gap: 14px;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
 }
 
-.search-results-header h2 {
-  font-family: var(--font-display);
-  font-size: 22px;
-  letter-spacing: 0.04em;
+.movie-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--surface3);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
 }
 
-.search-results-header h2 em {
-  font-style: italic;
-  color: var(--accent);
-}
-
-.search-results-header span {
-  font-size: 13px;
+.movie-loading-title {
   color: var(--muted);
+  font-size: 14px;
 }
 
-.grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--gap);
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── Footer ── */
 .footer {
   padding: 24px 48px;
   border-top: 1px solid var(--border);
@@ -398,34 +287,8 @@ onMounted(async () => {
 }
 .footer a:hover { color: var(--white); }
 
-/* ── Gear button ── */
-.gear-btn {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 10;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  width: 38px;
-  height: 38px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  cursor: pointer;
-  color: var(--muted);
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-.gear-btn:hover {
-  color: var(--white);
-  border-color: rgba(255, 255, 255, 0.2);
-  background: var(--surface3);
-}
-
-/* ── Mobile ── */
 @media (max-width: 640px) {
-  .search-results-grid { padding: 0 16px; }
+  .app-header { min-height: 50px; padding: 8px 14px; }
   .footer { padding: 24px 16px; }
 }
 </style>
